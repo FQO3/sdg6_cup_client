@@ -3,6 +3,18 @@ export default defineNuxtConfig({
   compatibilityDate: '2025-01-01',
   devtools: { enabled: true },
 
+  // 开发服务器监听 0.0.0.0:3000
+  devServer: {
+    host: '0.0.0.0',
+    port: 3000,
+  },
+
+  // 生产构建使用 Nitro node-server 预设；
+  // 运行时监听地址/端口由环境变量 HOST/PORT 控制（见 package.json start 脚本）
+  nitro: {
+    preset: 'node-server',
+  },
+
   // 运行时配置：private 仅服务端(BFF)可读，public 客户端可读
   runtimeConfig: {
     // 后端(队友 Express)真实地址与鉴权 Key —— 只存在 server 侧，不下发浏览器

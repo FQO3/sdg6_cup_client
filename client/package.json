@@ -6,12 +6,14 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "dev": "nuxt dev",
+    "dev": "nuxt dev --host 0.0.0.0 --port 3000",
     "build": "nuxt build",
     "preview": "nuxt preview",
+    "start": "cross-env HOST=0.0.0.0 PORT=3000 node .output/server/index.mjs",
     "postinstall": "nuxt prepare"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "nuxt": "3.17.7",
     "vue": "^3.5.0",
     "@types/web-bluetooth": "^0.0.20",

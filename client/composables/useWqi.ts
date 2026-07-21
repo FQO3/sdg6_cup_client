@@ -1,9 +1,12 @@
 import { ref } from 'vue'
-import type { Metrics, WaterLevel } from '~/types/reading'
+import type { Metrics } from '~/types/reading'
 
 /**
  * Demo Mode：无硬件时生成模拟指标。
  * 由 runtimeConfig.public.demoMode 或页面开关控制。
+ *
+ * ⚠️ Demo Mode 不调后端 /evaluate，用内置简化阈值直接显示 level，
+ *    使其在不连 BLE 时也能看到完整 UI 效果。
  */
 export function useDemo() {
   const running = ref(false)
@@ -11,7 +14,6 @@ export function useDemo() {
   let timer: ReturnType<typeof setInterval> | null = null
 
   function rand(min: number, max: number, d = 1) {
-    /** 生成指定范围内的随机数，保留 d 位小数 **/
     return +(min + Math.random() * (max - min)).toFixed(d)
   }
 
@@ -22,6 +24,7 @@ export function useDemo() {
       temperature: rand(15, 50, 1),
       turbidity: rand(0.2, 6, 2),
       ec: rand(100, 1200, 0),
+      wet: Math.random() > 0.3, // 70% 概率模拟已浸没
     }
   }
 
@@ -41,14 +44,14 @@ export function useDemo() {
 }
 
 /**
- * 客户端仅做「离线降级判级」用于即时 UI 反馈；
- * 权威 WQI/level 以 POST /readings 后端同步返回为准。
+ * Demo Mode 用的简化 fallback 判级（不调后端，仅演示 UI）
+ * ─ 正常 BLE 模式下由后端数学模型判级，不走此函数
  */
-export function localLevelFallback(m: Metrics): WaterLevel {
-  const ph = m.ph ?? 7
-  const tds = m.tds ?? 0
-  const turb = m.turbidity ?? 0
-  if (ph < 6.5 || ph > 8.5 || tds > 500 || turb > 5) return 'danger'
-  if (tds > 300 || turb > 1) return 'warning'
-  return 'safe'
+export function demoLevelFallback(m: Metrics): { level: string; wqi: number } {
+  const ph = (m.ph as number) ?? 7
+  const tds = (m.tds as number) ?? 0
+  const turb = (m.turbidity as number) ?? 0
+  if (ph < 6 || ph > 9 || tds > 600 || turb > 5) return { level: 'danger', wqi: 35 }
+  if (ph < 6.5 || ph > 8.5 || tds > 300 || turb > 1) return { level: 'warning', wqi: 65 }
+  return { level: 'safe', wqi: 85 }
 }

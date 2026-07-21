@@ -212,3 +212,6 @@ python evaluate.py --interactive
 - **接口**：FastAPI + Pydantic
 - **评价**：二次加权 Cohen's Kappa + 混淆矩阵 + MAE
 - **理论**：互信息 + Fano 不等式（信息论错误率下界）
+
+## 主模块
+[跳转链接](/README.md)

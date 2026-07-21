@@ -122,3 +122,12 @@ npm run dev                           # 监听 0.0.0.0:3000
 - [ ] 后续迭代：后端 `POST /api/v1/reports` 异步调用 LLM，根据检测指标 + 区域水文数据生成水质分析报告（Markdown），写入 `llm_report` 字段
 - [ ] 客户端 `GET /api/v1/reports/{id}` 展示 LLM 报告全文（history 页点击展开）
 - [ ] 大屏端 `POST /api/v1/reports/generate` 生成政府/NGO 汇报材料（Part C）
+
+### 传感器标定
+- [ ] TDS：用标准液校准（如 342ppm / 1413μS/cm）
+- [ ] pH：两点校准（pH 4.0 + 6.86 或 9.18）
+- [ ] 浊度：福尔马肼标准液梯度校准
+- [ ] 温度：出厂已校准，一般无需额外操作
+
+## 数学模型模块
+[跳转链接](/MathModeling-WaterQualification/Water%20Quality%20Pipeline/README.md)

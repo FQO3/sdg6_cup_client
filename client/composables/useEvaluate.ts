@@ -3,7 +3,7 @@ import type { Metrics, EvaluateResult } from '~/types/reading'
 import { appendRatingPoint } from '~/composables/useRatingHistory'
 
 /**
- * 链路 A — 实时判级
+ * 链路 A — 实时判级（GB 3838 国标 6 级）
  *
  * ─ 监听每 3 帧聚合后的 batchedMetrics → POST /evaluate → 覆盖显示 result
  * ─ 高频、不入库。result 仅用于当前 UI 覆盖。
@@ -20,14 +20,15 @@ export function useEvaluate(batchedMetrics: Ref<Metrics | null>, deviceId: Ref<s
     try {
       const res = await $fetch<{ code: number; data: EvaluateResult }>('/api/evaluate', {
         method: 'POST',
-        body: { device_id: deviceId.value, metrics: m } as Record<string, unknown>,
+        body: { device_id: deviceId.value, metrics: m },
       })
       if (res?.data) {
         result.value = res.data
         appendRatingPoint({
           timestamp: Date.now(),
-          wqi: res.data.wqi,
-          level: res.data.level,
+          grade: res.data.grade,
+          grade_index: res.data.grade_index,
+          confidence: res.data.confidence,
         })
       }
     } catch {

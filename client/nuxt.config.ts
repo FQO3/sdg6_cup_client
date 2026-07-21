@@ -20,6 +20,8 @@ export default defineNuxtConfig({
     // 后端(队友 Express)真实地址与鉴权 Key —— 只存在 server 侧，不下发浏览器
     backendBaseUrl: process.env.BACKEND_BASE_URL || 'http://localhost:4000/api/v1',
     backendApiKey: process.env.BACKEND_API_KEY || 'dev-key-change-me',
+    // ★ Water Quality Pipeline（随机森林 GB 等级预测，FastAPI 端口 8080）
+    pipelineBaseUrl: process.env.PIPELINE_BASE_URL || 'http://localhost:8080',
     public: {
       // 客户端可见配置
       demoMode: process.env.NUXT_PUBLIC_DEMO_MODE === 'true',

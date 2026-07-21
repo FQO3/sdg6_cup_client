@@ -1,25 +1,41 @@
 # SDG6 AquaCheck · Part 2（水杯端 + 客户端）
 
-三天 Hackathon 的 **水杯设计** 部分。三端结构：
-水杯端(ESP32) --BLE--> 客户端(Nuxt3, 你负责) --HTTPS--> 后端(队友 Express+DB+LLM)
+三天 Hackathon 的 **水杯设计** 部分。四层架构：
+**水杯端**(ESP32) --BLE--> **客户端**(Nuxt3) --HTTPS--> **Pipeline**(FastAPI, RF 模型) --HTTPS--> **后端**(队友 Express+DB+LLM)
 
-## 架构决策（Nuxt3 + BFF + 两条独立链路）
+## 架构决策
 
+### Nuxt3 + BFF 薄代理
 客户端 = Nuxt3。`server/` 仅作 **薄 BFF 代理**：转发请求 + 注入 `X-API-Key`，把后端真实地址与 Key 藏在服务端，浏览器看不到。
 
-**两条独立链路彻底拆分**：
+### Water Quality Pipeline（随机森林 GB 等级预测）
+队友独立开发的 FastAPI 服务（端口 8080），基于 scikit-learn Random Forest (n=400) 对 **4 参数**（temperature, ph, ec, turbidity）进行 GB 3838-2002 国标 6 级分类：
+
+| 序号 | 等级 | 含义 |
+|------|------|------|
+| 0 | Ⅰ类 | 源头水 / 国家自然保护区 |
+| 1 | Ⅱ类 | 集中式饮用水源地一级保护区 |
+| 2 | Ⅲ类 | 集中式饮用水源地二级保护区 |
+| 3 | Ⅳ类 | 一般工业用水区 |
+| 4 | Ⅴ类 | 农业用水区 |
+| 5 | 劣Ⅵ类 | 污染水体 |
+
+模型准确率 74.1%，±1 级容错率 97.3%。具体见 `API_DESIGN.md` 附录。
+
+### 两条独立链路彻底拆分（v2：GB 国标版）
 
 | | 链路 A：实时判级 | 链路 B：提交报告 |
 |---|---|---|
 | **触发** | 自动（每 3 帧一次） | 用户主动点按钮 |
 | **频率** | 高频 | 低频 |
 | **是否入库** | ❌ 不入库 | ✅ 入库（reports 表） |
-| **接口** | `POST /evaluate` | `POST /reports` |
-| **返回** | `{wqi, level}` | `{report_id, wqi, level, llm_report, created_at}` |
-| **用途** | 覆盖显示当前 WQI/等级 | 生成历史记录 + LLM 分析报告 |
+| **数据流** | 客户端 → BFF → Pipeline `/predict` | 客户端 → BFF→Pipeline(判级)→后端 `/reports`(入库) |
+| **接口** | `POST /api/evaluate` | `POST /api/reports` |
+| **返回** | `{grade, grade_index, confidence}` | `{report_id, grade, grade_index, llm_report, created_at}` |
+| **用途** | 覆盖显示当前 GB 等级 | 生成历史记录 + LLM 分析报告 |
 
-- **客户端本地不判级**（Demo Mode 除外）。WQI/level 全部由后端数学模型计算。
-- **不在 BFF 写 WQI / 大数据逻辑** —— 那是后端职责。
+- **客户端本地不判级**（Demo Mode 除外）。GB 等级全部由 Pipeline 随机森林模型计算。
+- **不在 BFF 写判级 / 大数据逻辑** —— 那是 Pipeline 和后端的职责。
 - **水位检测**：水杯端两根导线导通 = 高电平 → `wet: true`。客户端透传此标志提示浸没状态。
 - **多帧聚合**：BLE 每收满 3 帧 → 逐字段取中位数（抗异常值）→ 调 `/evaluate`。同时保留最新单帧给 MetricCard 展示。
 
@@ -34,22 +50,22 @@
 ```
 sdg6-cup/
 ├── client/                          # Nuxt3 客户端（你负责）
-│   ├── nuxt.config.ts               # runtimeConfig: 后端地址/Key(server) + demoMode(public)
+│   ├── nuxt.config.ts               # runtimeConfig: backendBaseUrl/pipelineBaseUrl(server) + demoMode(public)
 │   ├── .env.example
-│   ├── types/reading.ts             # 双链路类型：EvaluatePayload/Result + ReportPayload/Result + RatingPoint
+│   ├── types/reading.ts             # GB 6 级类型：GBGrade, EvaluateResult, ReportResult, RatingPoint
 │   ├── composables/
 │   │   ├── useBle.ts                # Web Bluetooth + 3帧缓冲/中位数聚合 + wet 透传
 │   │   ├── useWqi.ts                # Demo 模拟 + Demo 降级判级（仅 Demo 用）
-│   │   ├── useEvaluate.ts           # 链路 A：监听 batchedMetrics → 调 /evaluate → 结果覆盖
+│   │   ├── useEvaluate.ts           # 链路 A：监听 batchedMetrics → BFF → Pipeline /predict → grade
 │   │   ├── useReports.ts            # 链路 B：提交报告 / 查询历史
-│   │   └── useRatingHistory.ts      # 跨页面共享的判级时间序列（供历史页折线图）
-│   ├── components/MetricCard.vue    # 指标展示 + 每项静态阈值科普
+│   │   └── useRatingHistory.ts      # 跨页面共享的判级时间序列（grade_index, 供历史页折线图）
+│   ├── components/MetricCard.vue    # 指标展示：标注模型输入参数 + TDS 补充参考
 │   ├── pages/
-│   │   ├── index.vue                # 检测页：BLE 连接 → 实时判级区 + 提交报告区(含 note)
-│   │   └── history.vue              # 历史：判级时间折线图（Canvas）+ 提交报告列表
+│   │   ├── index.vue                # 检测页：BLE 连接 → GB 等级显示(6色) + 提交报告区
+│   │   └── history.vue              # 历史：判级折线图(grade_index) + 报告列表(按 GB 等级着色)
 │   └── server/api/
-│       ├── evaluate.post.ts         # BFF：POST /api/evaluate → 后端 /api/v1/evaluate
-│       ├── reports.post.ts          # BFF：POST /api/reports → 后端 /api/v1/reports
+│       ├── evaluate.post.ts         # BFF：直接调 Pipeline /predict（不回后端）
+│       ├── reports.post.ts          # BFF：先调 Pipeline 判级 → 合并 grade 后转发后端 /reports
 │       ├── reports.get.ts           # BFF：GET /api/reports → 后端 /api/v1/reports
 │       └── reports/[id].get.ts      # BFF：GET /api/reports/:id → 后端 /api/v1/reports/{id}
 └── firmware/cup_ble/cup_ble.ino     # ESP32 BLE 骨架（UUID 对齐、JSON 载荷含 wet 标志）
@@ -57,52 +73,52 @@ sdg6-cup/
 
 ## 跑起来
 ```bash
-cd client
-cp .env.example .env      # 填后端地址/Key；无后端可先只用 Demo Mode
-npm install
-npm run dev               # 监听 0.0.0.0:3000（同网设备可访问；localhost 满足 Web Bluetooth）
-```
+# 1. 启动 Pipeline（队友）
+cd MathModeling-WaterQualification/"Water Quality Pipeline"
+python api.py                         # FastAPI 监听 localhost:8080
 
-## 部署（生产）
-```bash
+# 2. 启动后端（队友）
+# Express 监听 localhost:4000
+
+# 3. 启动客户端
 cd client
+cp .env.example .env                  # 填 pipelineBaseUrl + backendBaseUrl
 npm install
-npm run build             # 产物在 .output/（Nitro node-server 预设）
-npm run start             # 监听 0.0.0.0:3000（HOST/PORT 可用环境变量覆盖）
+npm run dev                           # 监听 0.0.0.0:3000
 ```
-> 注意：Web Bluetooth 需 HTTPS，生产环境请在 0.0.0.0:3000 前置反向代理（Nginx/Caddy）启用 TLS。
 
 ## 与队友的契约
 以 `API_DESIGN.md` 为准。核心接口：
 
-| 接口 | 方向 | 说明 |
-|------|------|------|
-| `POST /api/v1/evaluate` | 客户端→后端 | 链路 A：发 3 帧平均值，后端数学模型返回 `{wqi, level}`，不入库 |
-| `POST /api/v1/reports` | 客户端→后端 | 链路 B：提交报告（含 location、user_note），入库并返回 `{report_id, wqi, level, llm_report, created_at}` |
-| `GET /api/v1/reports` | 客户端→后端 | 查询历史报告列表（分页/筛选） |
-| `GET /api/v1/reports/{id}` | 客户端→后端 | 查询单条报告详情（含 llm_report 全文） |
+| 接口 | 调用链 | 说明 |
+|------|--------|------|
+| `POST {pipeline}/predict` | BFF → Pipeline | 支持 4 特征（temp/ph/ec/turb），返回 `{grade, grade_index}` |
+| `POST /api/evaluate` | 客户端 → BFF → Pipeline | 链路 A：发 3 帧平均值 → Pipeline 判级，不入库 |
+| `POST /api/reports` | 客户端 → BFF→Pipeline→后端 | 链路 B：先判级再入库，返回 `{report_id, grade, grade_index, llm_report}` |
+| `GET /api/reports` | 客户端 → BFF → 后端 | 查询历史报告列表（分页） |
+| `GET /api/reports/{id}` | 客户端 → BFF → 后端 | 查询单条报告详情（含 llm_report 全文） |
 
-客户端 BFF（`server/api/`）仅透传 + 注入 `X-API-Key`，不改请求/响应结构。
+客户端 BFF（`server/api/`）**evaluate 链路直连 Pipeline**（不经过业务后端），**reports 链路先调 Pipeline 判级再转发后端入库**。
 
 ## 待办 / TODO
 
 ### 固件
-- [ ] firmware `readSensors()` 接真实传感器并标定换算
+- [ ] firmware `readSensors()` 接真实传感器（temperature, ph, ec, turbidity）并标定换算
 - [ ] 确认 measurement 载荷格式（当前 JSON 文本；若改二进制帧需同步改 `parseMeasurement`）
 - [ ] 水位检测器接线（两根导线导通→高电平，发送 `wet: true`）
 
 ### 客户端
 - [ ] 反地理编码接入正式地图 API（当前用 Nominatim 免费服务，有频率限制）
-- [ ] 后端联调后确认 BFF 透传的响应结构（`data` 包裹层）
+- [ ] Pipeline 联调确认 `/predict` 输入字段名和返回值结构
+- [ ] 后端联调确认 `reports.post.ts` BFF 合并 grade 后的入库逻辑
+
+### Pipeline 模型
+- [ ] 确认 `/predict` 端点支持单条和批量两种模式
+- [ ] 特征顺序对齐：`[temperature, ph, ec, turbidity]`
+- [ ] 返回格式对齐：`{grade: "Ⅲ类", grade_index: 2}`
 
 ### LLM 分析报告
 - [ ] **hackathon 期间优先返回占位文本**（如 "报告生成中，敬请期待"）
 - [ ] 后续迭代：后端 `POST /api/v1/reports` 异步调用 LLM，根据检测指标 + 区域水文数据生成水质分析报告（Markdown），写入 `llm_report` 字段
 - [ ] 客户端 `GET /api/v1/reports/{id}` 展示 LLM 报告全文（history 页点击展开）
 - [ ] 大屏端 `POST /api/v1/reports/generate` 生成政府/NGO 汇报材料（Part C）
-
-### 传感器标定
-- [ ] TDS：用标准液校准（如 342ppm / 1413μS/cm）
-- [ ] pH：两点校准（pH 4.0 + 6.86 或 9.18）
-- [ ] 浊度：福尔马肼标准液梯度校准
-- [ ] 温度：出厂已校准，一般无需额外操作

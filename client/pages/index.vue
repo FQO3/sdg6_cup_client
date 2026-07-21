@@ -4,7 +4,8 @@ import { useBle } from '~/composables/useBle'
 import { useDemo, demoLevelFallback } from '~/composables/useWqi'
 import { useEvaluate } from '~/composables/useEvaluate'
 import { useReports } from '~/composables/useReports'
-import type { Metrics, ReportPayload } from '~/types/reading'
+import type { Metrics, GBGrade, ReportPayload } from '~/types/reading'
+import { GB_GRADE_ORDER, GB_GRADE_LABELS } from '~/types/reading'
 
 const config = useRuntimeConfig()
 const ble = useBle()
@@ -33,13 +34,26 @@ const demoEval = computed(() =>
   demo.metrics.value ? demoLevelFallback(demo.metrics.value) : null,
 )
 
-/** 当前显示的水质等级/WQI：Demo 用本地，BLE 用后端 /evaluate */
-const displayLevel = computed(() =>
-  demoOn.value ? demoEval.value?.level ?? null : evaluate.result.value?.level ?? null,
+/** 当前显示的 GB 等级：Demo 用本地，BLE 用 Pipeline 返回 */
+const displayGrade = computed<GBGrade | null>(() =>
+  demoOn.value ? demoEval.value?.grade ?? null : evaluate.result.value?.grade ?? null,
 )
-const displayWqi = computed(() =>
-  demoOn.value ? demoEval.value?.wqi ?? null : evaluate.result.value?.wqi ?? null,
+const displayGradeIndex = computed<number | null>(() =>
+  demoOn.value ? demoEval.value?.grade_index ?? null : evaluate.result.value?.grade_index ?? null,
 )
+const displayConfidence = computed<number | null>(() =>
+  demoOn.value ? demoEval.value?.confidence ?? null : evaluate.result.value?.confidence ?? null,
+)
+
+// ───── 6 色方案（GB 等级背景色） ─────
+const GRADE_COLORS: Record<number, { bg: string; text: string }> = {
+  0: { bg: '#e3f2fd', text: '#1565c0' },   // Ⅰ类 — 深蓝
+  1: { bg: '#e8f4fd', text: '#42a5f5' },   // Ⅱ类 — 亮蓝
+  2: { bg: '#e8f5e9', text: '#2e7d32' },   // Ⅲ类 — 绿色
+  3: { bg: '#fff8e1', text: '#f57f17' },   // Ⅳ类 — 琥珀
+  4: { bg: '#fff3e0', text: '#e65100' },   // Ⅴ类 — 橙色
+  5: { bg: '#ffebee', text: '#c62828' },   // 劣Ⅵ类 — 红色
+}
 
 // ───── 链路 B：提交报告 ─────
 
@@ -72,7 +86,6 @@ async function onSubmit() {
     }
     reportResult.value = await submit(payload)
   } catch (e: any) {
-    // 不存本地缓存，提示重试
     alert('上报失败：' + (e?.message ?? '网络异常，请重试'))
   } finally {
     submitting.value = false
@@ -90,7 +103,6 @@ async function getPosition(): Promise<{ lat: number; lng: number }> {
   })
 }
 
-/** 反地理编码（用免费 Nominatim API） */
 async function reverseGeocode(lat: number, lng: number): Promise<string> {
   try {
     const res = await $fetch<{ display_name?: string }>(
@@ -130,14 +142,22 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
     <MetricCard :metrics="displayMetrics" />
 
     <section
-      v-if="displayLevel"
+      v-if="displayGrade"
       class="eval"
-      :data-level="displayLevel"
+      :style="{
+        background: GRADE_COLORS[displayGradeIndex ?? 3]?.bg ?? '#f5f5f5',
+        borderLeft: `4px solid ${GRADE_COLORS[displayGradeIndex ?? 3]?.text ?? '#999'}`,
+      }"
     >
-      <h2>实时水质评估</h2>
-      <p>WQI：<b>{{ displayWqi }}</b> / 100</p>
-      <p>等级：<b>{{ displayLevel }}</b></p>
-      <small v-if="!demoOn">（每 3 帧评测一次，仅供参考）</small>
+      <h2>实时水质评估（GB 3838-2002）</h2>
+      <p class="grade-text" :style="{ color: GRADE_COLORS[displayGradeIndex ?? 3]?.text }">
+        <b>{{ displayGrade }}</b>
+      </p>
+      <p class="grade-desc">{{ GB_GRADE_LABELS[displayGrade] }}</p>
+      <p v-if="displayConfidence != null" class="confidence">
+        模型置信度：<b>{{ (displayConfidence * 100).toFixed(2) }}%</b>
+      </p>
+      <small v-if="!demoOn">（每 3 帧评测一次，随机森林模型 · 仅供参考）</small>
       <small v-else>（Demo 本地简化判级）</small>
     </section>
 
@@ -155,10 +175,17 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
       </button>
     </section>
 
-    <section v-if="reportResult" class="result" :data-level="reportResult.level">
+    <section
+      v-if="reportResult"
+      class="result"
+      :style="{
+        background: GRADE_COLORS[reportResult.grade_index]?.bg ?? '#f5f5f5',
+        borderLeft: `4px solid ${GRADE_COLORS[reportResult.grade_index]?.text ?? '#999'}`,
+      }"
+    >
       <h2>报告已提交</h2>
       <p>ID：<b>{{ reportResult.report_id }}</b></p>
-      <p>WQI：<b>{{ reportResult.wqi }}</b> / 100 · 等级：<b>{{ reportResult.level }}</b></p>
+      <p>等级：<b>{{ reportResult.grade }}</b> · {{ GB_GRADE_LABELS[reportResult.grade] }}</p>
       <details v-if="reportResult.llm_report">
         <summary>LLM 分析报告</summary>
         <div class="llm" v-html="reportResult.llm_report" />
@@ -174,18 +201,19 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
 .bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 16px 0; }
 .err { color: #c0392b; }
 .wet { padding: 8px 12px; border-radius: 6px; background: #e8f5e9; font-size: 14px; }
-.wet:has(text:contains('未')) { background: #fff3e0; }
+
 .primary { padding: 10px 20px; margin: 16px 0; }
-.eval { padding: 16px; border-radius: 8px; background: #f5f5f5; margin: 16px 0; }
-.eval[data-level='safe'] { background: #e8f5e9; }
-.eval[data-level='warning'] { background: #fff8e1; }
-.eval[data-level='danger'] { background: #ffebee; }
+
+.eval { padding: 16px; border-radius: 8px; margin: 16px 0; }
+.grade-text { font-size: 36px; margin: 8px 0; }
+.grade-desc { font-size: 14px; color: #555; margin: 4px 0; }
+.confidence { font-size: 13px; color: #888; }
+
 .report-section { margin: 24px 0; padding: 16px; border: 1px solid #e0e0e0; border-radius: 8px; }
 .note-input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; resize: vertical; }
-.result { padding: 16px; border-radius: 8px; background: #f5f5f5; margin: 16px 0; }
-.result[data-level='safe'] { background: #e8f5e9; }
-.result[data-level='warning'] { background: #fff8e1; }
-.result[data-level='danger'] { background: #ffebee; }
+
+.result { padding: 16px; border-radius: 8px; margin: 16px 0; }
+
 .llm { white-space: pre-wrap; font-size: 14px; margin-top: 8px; }
 small { display: block; color: #888; margin-top: 4px; }
 </style>

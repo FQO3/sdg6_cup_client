@@ -10,14 +10,18 @@ api.py —— FastAPI 水质等级预测接口
   
 curl -X POST http://localhost:8080/predict \
   -H "Content-Type: application/json" \
-  -d '{"水温(℃)":22.5,"pH(无量纲)":7.2,"电导率(μS/cm)":350,"浊度(NTU)":15}'
+  -d '{"temperature":22.5,"ph":7.2,"ec":350,"turbidity":15,"wet":false}'
 
 """
+import logging
 import joblib
 import numpy as np
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel, Field
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+logger = logging.getLogger('water-api')
 
 # ── 加载模型 ──────────────────────────────────
 BASE = Path(__file__).parent
@@ -31,38 +35,53 @@ model, scaler, feats, order = pkg['model'], pkg['scaler'], pkg['features'], pkg[
 app = FastAPI(title='水质等级预测 API', version='1.0')
 
 
+@app.middleware('http')
+async def log_requests(request: Request, call_next):
+    """打印收到的请求"""
+    body = await request.body()
+    logger.info(
+        '收到请求 %s %s client=%s body=%s',
+        request.method,
+        request.url.path,
+        request.client.host if request.client else '-',
+        body.decode('utf-8', 'replace') if body else '',
+    )
+    return await call_next(request)
+
+
 class PredictRequest(BaseModel):
-    水温_degC: float = Field(..., alias='水温(℃)', description='水温(℃)')
-    pH: float = Field(..., alias='pH(无量纲)', description='pH(无量纲)')
-    电导率_uScm: float = Field(..., alias='电导率(μS/cm)', description='电导率(μS/cm)')
-    浊度_NTU: float = Field(..., alias='浊度(NTU)', description='浊度(NTU)')
+    temperature: float = Field(..., description='水温(℃)')
+    ph: float = Field(..., description='pH(无量纲)')
+    ec: float = Field(..., description='电导率(μS/cm)')
+    turbidity: float = Field(..., description='浊度(NTU)')
+    wet: bool = Field(False, description='是否湿季')
 
 
 class PredictResponse(BaseModel):
-    等级: str
-    等级序号: int           # 0=I类 ... 5=劣Ⅵ类
-    置信度: float           # 最大类概率
-    各类概率: dict
+    grade: str                              # 等级，如 "Ⅱ类"
+    grade_index: int                        # 0=Ⅰ类 ... 5=劣Ⅵ类
+    confidence: float                       # 最大类概率
+    probabilities: dict                     # 各类概率
 
 
 @app.post('/predict', response_model=PredictResponse)
 def predict(req: PredictRequest):
     """用 4 个便宜参数预测水质等级"""
     X = np.array([[
-        req.水温_degC,
-        req.pH,
-        req.电导率_uScm,
-        req.浊度_NTU,
+        req.temperature,
+        req.ph,
+        req.ec,
+        req.turbidity,
     ]], dtype=float)
     X_s = scaler.transform(X)
     probs = model.predict_proba(X_s)[0]
     idx = int(probs.argmax())
 
     return PredictResponse(
-        等级=order[idx],
-        等级序号=idx,
-        置信度=round(float(probs[idx]), 4),
-        各类概率={order[i]: round(float(p), 4) for i, p in enumerate(probs)},
+        grade=order[idx],
+        grade_index=idx,
+        confidence=round(float(probs[idx]), 4),
+        probabilities={order[i]: round(float(p), 4) for i, p in enumerate(probs)},
     )
 
 

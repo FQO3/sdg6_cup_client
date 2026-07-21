@@ -1,22 +1,36 @@
 /**
- * BFF 代理：POST /api/evaluate  →  后端 POST {backend}/evaluate
- * 链路 A：实时判级，不入库。职责仅限：转发 + 注入 X-API-Key。
+ * BFF: POST /api/evaluate → Water Quality Pipeline POST {pipeline}/predict
+ * 链路 A：实时 GB 等级预测，不入库。直连流水线（绕过业务后端）。
  */
 export default defineEventHandler(async (event) => {
   const config = useRuntimeConfig()
   const body = await readBody(event)
+  // body: { device_id, metrics: { temperature, ph, ec, turbidity } }
 
   try {
-    const res = await $fetch(`${config.backendBaseUrl}/api/v1/evaluate`, {
+    const pipelineResult = await $fetch(`${config.pipelineBaseUrl}/predict`, {
       method: 'POST',
-      headers: { 'X-API-Key': config.backendApiKey },
-      body,
+      headers: { 'Content-Type': 'application/json' },
+      body: body.metrics ?? body,
     })
-    return (res as any)?.data ? { code: 0, message: 'ok', data: (res as any).data } : res
+    // pipelineResult: { grade: string, grade_index: number }
+    console.log('[evaluate] Pipeline response:', JSON.stringify(pipelineResult))
+    const r = pipelineResult as any
+    return {
+      code: 0,
+      message: 'ok',
+      data: {
+        grade: r.grade,
+        grade_index: r.grade_index,
+        confidence: r.confidence,
+        probabilities: r.probabilities,
+      },
+    }
   } catch (e: any) {
+    console.error('[evaluate] Pipeline error:', e?.data ?? e?.message)
     throw createError({
       statusCode: e?.response?.status || 502,
-      statusMessage: 'Backend upstream error',
+      statusMessage: 'Pipeline upstream error',
       data: e?.data,
     })
   }

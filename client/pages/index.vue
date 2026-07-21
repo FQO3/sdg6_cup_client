@@ -20,8 +20,13 @@ const batchedSource = computed<Metrics | null>(() =>
   demoOn.value ? demo.metrics.value : ble.batchedMetrics.value,
 )
 
+/** 当前设备 ID：Demo 用固定名，BLE 用真实设备名 */
+const deviceId = computed(() =>
+  demoOn.value ? 'demo-device' : (ble.deviceName.value || 'unknown'),
+)
+
 /** 链路 A 判级 composable：监听 batchedSource 自动调 /evaluate */
-const evaluate = useEvaluate(batchedSource)
+const evaluate = useEvaluate(batchedSource, deviceId)
 
 /** Demo 模式：本地简化判级，不调后端 */
 const demoEval = computed(() =>
@@ -59,7 +64,7 @@ async function onSubmit() {
     const pos = await getPosition()
     const region = await reverseGeocode(pos.lat, pos.lng)
     const payload: ReportPayload = {
-      device_id: ble.deviceName.value || 'demo-device',
+      device_id: deviceId.value,
       location: { lat: pos.lat, lng: pos.lng, region },
       metrics: m,
       user_note: userNote.value || undefined,

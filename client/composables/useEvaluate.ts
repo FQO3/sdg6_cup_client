@@ -10,17 +10,17 @@ import { appendRatingPoint } from '~/composables/useRatingHistory'
  * ─ 采样点 push 到共享的 ratingTimeline（跨 index/history 页面）。
  */
 
-export function useEvaluate(batchedMetrics: Ref<Metrics | null>) {
+export function useEvaluate(batchedMetrics: Ref<Metrics | null>, deviceId: Ref<string>) {
   const result = ref<EvaluateResult | null>(null)
   const loading = ref(false)
 
   watch(batchedMetrics, async (m) => {
-    if (!m) return
+    if (!m || !deviceId.value) return
     loading.value = true
     try {
       const res = await $fetch<{ code: number; data: EvaluateResult }>('/api/evaluate', {
         method: 'POST',
-        body: { device_id: 'cup-001', metrics: m } as Record<string, unknown>,
+        body: { device_id: deviceId.value, metrics: m } as Record<string, unknown>,
       })
       if (res?.data) {
         result.value = res.data

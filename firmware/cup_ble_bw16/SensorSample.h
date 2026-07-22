@@ -6,4 +6,7 @@ struct SensorSample {
   float temperature;
   float turbidity;
   float ec;
+  bool wet;
 };
+
+

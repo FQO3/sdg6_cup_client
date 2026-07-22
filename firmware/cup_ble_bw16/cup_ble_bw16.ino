@@ -44,7 +44,11 @@ bool notifyEnabled = false;
 const uint32_t SAMPLE_INTERVAL_MS = 700;
 uint32_t lastSample = 0;
 
-int luminance = 150;
+int luminance = 255;
+
+// 水位检测：两根导线导通 = 高电平 → wet=true（水杯已浸没）
+#define WATER_LEVEL_PIN PA27
+
 
 // CCCD 回调：central 写入 0x2902 时触发，判断是否开启了 Notify
 void measureCCCDCallback(BLECharacteristic* chr, uint8_t connID, uint16_t cccd) {
@@ -71,22 +75,29 @@ SensorSample readSensors() {
   m.temperature = 20;
   m.turbidity = 200;
   m.ec = 400;
+  // 水位检测：两根导线导通=高电平 → 水杯已浸没
+  m.wet = (digitalRead(WATER_LEVEL_PIN) == HIGH);
   return m;
 }
 
 String toJson(const SensorSample& m) {
   char buf[PAYLOAD_BUF_SIZE];
   snprintf(buf, sizeof(buf),
-           "{\"tds\":%.0f,\"ph\":%.2f,\"temperature\":%.1f,\"turbidity\":%.2f,\"ec\":%.0f}",
-           m.tds, m.ph, m.temperature, m.turbidity, m.ec);
+           "{\"tds\":%.0f,\"ph\":%.2f,\"temperature\":%.1f,\"turbidity\":%.2f,\"ec\":%.0f,\"wet\":%s}",
+           m.tds, m.ph, m.temperature, m.turbidity, m.ec, m.wet ? "true" : "false");
   return String(buf);
 }
+
 
 void setup() {
   pinMode(LED_R, OUTPUT);
   pinMode(LED_G, OUTPUT);
   pinMode(LED_B, OUTPUT);
   led(255,0,0);
+
+  // 水位检测引脚：外部下拉，导通时被拉高 → HIGH=浸没
+  pinMode(WATER_LEVEL_PIN, INPUT);
+
 
   Serial.begin(115200);
   // 广播：Flags + 设备名放主广播；服务 UUID 放扫描响应，避免 31 字节溢出

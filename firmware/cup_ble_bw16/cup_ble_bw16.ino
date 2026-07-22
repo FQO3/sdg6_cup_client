@@ -53,11 +53,11 @@ void measureCCCDCallback(BLECharacteristic* chr, uint8_t connID, uint16_t cccd) 
 }
 
 // TODO: 替换为真实传感器采集 + 标定换算
-struct Metrics { float tds, ph, temperature, turbidity, ec; };
+struct SensorSample { float tds, ph, temperature, turbidity, ec; };
 
-Metrics readSensors() {
+SensorSample readSensors() {
   // 示例模拟值；实际接 TDS/pH/温度/浊度模块的 ADC 读数并换算
-  Metrics m;
+  SensorSample m;
   m.tds         = 100 + random(0, 500);
   m.ph          = 6.5 + random(0, 200) / 100.0;
   m.temperature = 18 + random(0, 120) / 10.0;
@@ -66,7 +66,7 @@ Metrics readSensors() {
   return m;
 }
 
-String toJson(const Metrics& m) {
+String toJson(const SensorSample& m) {
   char buf[PAYLOAD_BUF_SIZE];
   snprintf(buf, sizeof(buf),
     "{\"tds\":%.0f,\"ph\":%.2f,\"temperature\":%.1f,\"turbidity\":%.2f,\"ec\":%.0f}",

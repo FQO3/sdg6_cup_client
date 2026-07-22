@@ -136,11 +136,14 @@ export function useDemo() {
   }
 
   function start() {
+    // 定时器只在浏览器端运行，避免 SSR 期间调用 setInterval 报错
+    if (import.meta.server) return
     running.value = true
     resetBatch()
     pushFrame(tick())
     timer = setInterval(() => pushFrame(tick()), 700)
   }
+
 
   function stop() {
     running.value = false

@@ -22,13 +22,14 @@ export default defineNuxtConfig({
     backendApiKey: process.env.BACKEND_API_KEY || 'dev-key-change-me',
     // ★ Water Quality Pipeline（随机森林 GB 等级预测，FastAPI 端口 8080）
     pipelineBaseUrl: process.env.PIPELINE_BASE_URL || 'http://localhost:8080',
+    // 高德地图 Web 服务 Key：仅服务端(BFF)可读，用于逆地理编码 REST API，不下发浏览器
+    amapKey: process.env.AMAP_KEY || 'e55ba3aaffc83e8c3438c52a5dd48659',
     public: {
       // 客户端可见配置
       demoMode: process.env.NUXT_PUBLIC_DEMO_MODE === 'true',
       appName: 'AquaCheck',
-      // 高德地图 JS/WebService Key：用于浏览器端逆地理编码
-      amapKey: process.env.NUXT_PUBLIC_AMAP_KEY || '0d4cc945c411d0ce7a36899978c1fb22',
     },
+
   },
 
   // Web Bluetooth 要求 HTTPS 或 localhost；本地 dev 用 localhost 即可

@@ -21,7 +21,7 @@
 
 | 链路 | 协议 | 方向 | 说明 |
 |------|------|------|------|
-| 水杯端 → 客户端 | BLE GATT Notify | 单向推送 | ESP32 推原始/半成品数据 |
+| 水杯端 → 客户端 | BLE GATT Notify | 单向推送 | BW16 推原始/半成品数据 |
 | 客户端 → 水杯端 | BLE GATT Write | 单向下发 | 校准/配置指令（可选） |
 | 客户端 → 后端 | HTTPS REST | 请求/响应 | 上报数据、查询 |
 | 后端 → 大屏 | WebSocket | 服务端推送 | 实时数据流 |
@@ -84,37 +84,26 @@
 
 ### A.2 Char 1 — Measurement（Notify）`[MVP]`
 
-**方向**：ESP32 → 客户端（周期推送，建议 1~2s/次）
+**方向**：BW16 → 客户端（周期推送，`SAMPLE_INTERVAL_MS = 700`，约 0.7s/次）
 
-**Payload 方案（二选一）**
-
-#### 方案 1：JSON（联调首选，可读性好）
+#### 实际 Payload：JSON（固件当前实现）
+BW16 固件（`cup_ble_bw16.ino`，struct `SensorSample`）通过 Char `0xFFE1` Notify 推送 JSON 文本：
 ```json
-{ "tds": 342, "ph": 7.2, "temp": 25.3, "turb": 1.2, "seq": 105 }
+{ "tds": 342, "ph": 7.2, "temperature": 25.3, "turbidity": 1.2, "ec": 350 }
 ```
-> ⚠️ BLE 单包 MTU 默认约 20~23 字节，JSON 会超。需协商 MTU 到 ≥180，或改用方案 2。
+> 字段名与客户端 `types/reading.ts` 的 `Metrics` 完全一致：`tds / ph / temperature / turbidity / ec`（可选 `wet: boolean`）。无 `seq`。
+> ⚠️ BLE 单包 MTU 默认约 20~23 字节，JSON 会超。BW16 侧已协商 MTU 至 ≥180 承载单帧 JSON。
 
-#### 方案 2：二进制打包（省包，推荐正式用）
-小端序，固定 16 字节：
+#### 可选：二进制打包 `[待议·未实现]`
+若后续需省包/抗丢帧，可改小端序定长二进制帧（字段与上表一致）。**当前固件未实现，客户端解析按 JSON 处理**。
 
-| 偏移 | 字段 | 类型 | 说明 |
-|------|------|------|------|
-| 0 | seq | uint16 | 序号（丢包检测） |
-| 2 | tds | uint16 | ppm |
-| 4 | ph | int16 | pH×100（如 720=7.20） |
-| 6 | temp | int16 | ℃×100 |
-| 8 | turb | uint16 | NTU×100 |
-| 10 | chlorine | uint16 | mg/L×100（无则 0） |
-| 12 | flags | uint8 | bit0=校准中 bit1=低电 |
-| 13 | reserved | uint8[3] | 预留对齐 |
-
-**客户端处理**：解包 → 换算真实值 → 经 BFF 送随机森林模型判 GB 等级（见附录）。
+**客户端处理**：`useBle.ts` 解 JSON → `Metrics` → `useCapture.ts` 采集聚合 → 经 BFF 送随机森林模型判 GB 等级（见附录）。
 
 ### A.3 Char 2 — Device Info（Read）
 
 **方向**：客户端读取一次
 ```json
-{ "device_id": "cup-001", "fw": "1.0.0", "sensors": ["tds","ph","temp"] }
+{ "device_id": "cup-001", "name": "AquaCup-01", "fw": "1.0.0", "sensors": ["tds","ph","temperature","turbidity","ec"] }
 ```
 
 ### A.4 Char 3 — Command（Write）`[待议]`

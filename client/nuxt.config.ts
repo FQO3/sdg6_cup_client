@@ -26,6 +26,8 @@ export default defineNuxtConfig({
       // 客户端可见配置
       demoMode: process.env.NUXT_PUBLIC_DEMO_MODE === 'true',
       appName: 'AquaCheck',
+      // 高德地图 JS/WebService Key：用于浏览器端逆地理编码
+      amapKey: process.env.NUXT_PUBLIC_AMAP_KEY || '0d4cc945c411d0ce7a36899978c1fb22',
     },
   },
 

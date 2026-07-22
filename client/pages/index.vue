@@ -133,12 +133,68 @@ async function getPosition(): Promise<{ lat: number; lng: number }> {
   })
 }
 
+type AMapGeocodeResult = {
+  regeocode?: {
+    formattedAddress?: string
+    addressComponent?: {
+      province?: string
+      city?: string | string[]
+      district?: string
+      township?: string
+    }
+  }
+}
+
+declare global {
+  interface Window {
+    AMap?: any
+    __amapLoadingPromise?: Promise<void>
+  }
+}
+
+function loadAmapSdk(): Promise<void> {
+  if (typeof window === 'undefined') return Promise.reject(new Error('AMap SDK only works in browser'))
+  if (window.AMap?.Geocoder) return Promise.resolve()
+  if (window.__amapLoadingPromise) return window.__amapLoadingPromise
+
+  window.__amapLoadingPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    const key = config.public.amapKey
+    script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(String(key))}&plugin=AMap.Geocoder`
+    script.async = true
+    script.onload = () => resolve()
+    script.onerror = () => reject(new Error('高德地图 SDK 加载失败'))
+    document.head.appendChild(script)
+  })
+
+  return window.__amapLoadingPromise
+}
+
 async function reverseGeocode(lat: number, lng: number): Promise<string> {
+  if (!lat || !lng) return '未知区域'
+
   try {
-    const res = await $fetch<{ display_name?: string }>(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10`,
-    )
-    return res?.display_name ?? '未知区域'
+    await loadAmapSdk()
+    const geocoder = new window.AMap.Geocoder({
+      radius: 1000,
+      extensions: 'base',
+    })
+
+    return await new Promise<string>((resolve) => {
+      // 高德坐标顺序为 [lng, lat]
+      geocoder.getAddress([lng, lat], (status: string, result: AMapGeocodeResult | string) => {
+        if (status !== 'complete' || typeof result === 'string') return resolve('未知区域')
+
+        const regeocode = result.regeocode
+        const comp = regeocode?.addressComponent
+        const city = Array.isArray(comp?.city) ? '' : (comp?.city ?? '')
+        const area = [comp?.province, city, comp?.district, comp?.township]
+          .filter(Boolean)
+          .join('')
+
+        resolve(area || regeocode?.formattedAddress || '未知区域')
+      })
+    })
   } catch {
     return '未知区域'
   }

@@ -215,7 +215,13 @@
 
 ### B.3 `POST /api/v1/reports` — 提交报告 `[MVP]`（链路 B）
 
-> **低频、用户主动、入库**。用户点"提交报告"时调用。客户端打包当前稳定读数 + 地理位置 + 可选备注，后端入库并生成 LLM 分析报告。
+> **低频、用户主动、入库**。用户点"开始记录"→客户端进入**采集状态机**（见下），自动连续检测直至收满 **20 条有效样本**（去除不稳定/离散数据），采集完成后才提示：附加说明 + **真实性确认** + **水体类型单选**。确认后提交，后端入库并生成 LLM 分析报告。
+
+**客户端采集状态机**（`useCapture`）：
+> `idle → collecting → done / error`。`collecting` 阶段维护滑动窗口判稳（全特征 CV ≤ 阈值：ph/temperature 0.03、ec 0.08、turbidity 0.15），**稳定后**对每帧做离散判定（均值 ±2σ 之外则丢弃），有效帧调 `/api/evaluate` 判级并计入样本；收满 20 条 → `done`；累计检测超 60 次仍未收满 → `error`。
+> - **原始数据逐条保留**：`capture.raw_samples` 为 20 条原始传感器读数（`Metrics[]`）。
+> - **评级取众数**：`capture.grade / grade_index` 为 20 条判级结果的众数（并列取较差等级）。
+> - `capture.metrics` 为 20 条读数逐字段中位数的**代表读数**（后端二次判级用）。
 
 **Header**：`X-API-Key: <key>`
 
@@ -224,7 +230,19 @@
 {
   "device_id": "cup-001",
   "location": { "lat": 30.5, "lng": 114.3, "region": "武汉市洪山区" },
-  "metrics": { "tds": 342, "ph": 7.2, "temperature": 25.3, "turbidity": 1.2 },
+  "metrics": { "tds": 342, "ph": 7.2, "temperature": 25.3, "turbidity": 1.2, "ec": 684 },
+  "water_type": "river",
+  "authenticity_confirmed": true,
+  "capture": {
+    "raw_samples": [
+      { "ph": 7.2, "temperature": 25.3, "ec": 684, "turbidity": 1.2, "tds": 342, "wet": true }
+    ],
+    "metrics": { "ph": 7.2, "temperature": 25.3, "ec": 684, "turbidity": 1.2, "tds": 342 },
+    "grade": "Ⅲ类",
+    "grade_index": 2,
+    "grade_agreement": 0.9,
+    "stability": { "total_readings": 27, "discarded": 3, "cv": 0.021 }
+  },
   "user_note": "河水下游约 100m 处取样，有点异味",
   "measured_at": "2025-01-15T08:30:00Z"
 }
@@ -235,9 +253,22 @@
 | device_id | string | ✓ | 设备号 |
 | location.lat/lng | number | ✓ | 来自 Geolocation API |
 | location.region | string | ✓ | 反地理编码结果（客户端调地图 API 获取） |
-| metrics | object | ✓ | 当前稳定读数（取最近若干帧的中位数） |
+| metrics | object | ✓ | 代表读数（= `capture.metrics`，20 条逐字段中位数），后端二次判级用 |
+| water_type | string | ✓ | 水体类型单选：`tap`(自来水)/`river`(河水)/`lake`(湖泊/水库)/`well`(井水/地下水)/`purified`(纯净水)/`mineral`(矿泉水)/`boiled`(煮沸后的水)/`other`(其他) |
+| authenticity_confirmed | boolean | ✓ | 用户已勾选「真实采集的水体数据」；为 `false` 时客户端禁止提交 |
+| capture | object | ✓ | 采集聚合结果，见下表 |
 | user_note | string | | 用户备注（可选，留空也行） |
 | measured_at | string | ✓ | ISO8601 测量时间 |
+
+**capture 子字段**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| raw_samples | Metrics[] | **20 条原始传感器读数逐条保留** |
+| metrics | object | 20 条读数逐字段中位数（代表读数） |
+| grade / grade_index | string / number | 20 条判级结果**众数**（并列取较差等级） |
+| grade_agreement | number | 众数占比（0-1），一致率 |
+| stability | object | `{ total_readings, discarded, cv }`：累计检测次数、丢弃离散条数、最终稳定窗口 CV |
 
 **Response**
 ```json

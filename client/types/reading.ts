@@ -59,6 +59,39 @@ export interface EvaluateResult {
 }
 
 // ──────────────────────────────────────────
+// 水体类型（提交报告时用户单选）
+// 依据 GB 5749-2022 生活饮用水 + 常见 TDS 经验区间划分，仅作分类标注，不参与判级。
+// ──────────────────────────────────────────
+
+/** 用户可选的水体类型 */
+export type WaterType =
+  | 'tap'       // 自来水
+  | 'river'     // 河水
+  | 'lake'      // 湖水 / 池塘
+  | 'well'      // 井水 / 地下水
+  | 'purified'  // 纯净水 / 桶装水（RO）
+  | 'mineral'   // 矿泉水
+  | 'boiled'    // 煮沸水 / 开水
+  | 'other'     // 其他
+
+/** 水体类型枚举顺序（渲染单选框用） */
+export const WATER_TYPE_ORDER: WaterType[] = [
+  'tap', 'river', 'lake', 'well', 'purified', 'mineral', 'boiled', 'other',
+]
+
+/** 水体类型 → 中文标签 */
+export const WATER_TYPE_LABELS: Record<WaterType, string> = {
+  tap: '自来水',
+  river: '河水',
+  lake: '湖水 / 池塘',
+  well: '井水 / 地下水',
+  purified: '纯净水 / 桶装水',
+  mineral: '矿泉水',
+  boiled: '煮沸水 / 开水',
+  other: '其他',
+}
+
+// ──────────────────────────────────────────
 // 链路 B：提交报告（低频 / 用户主动 / 入库）
 // ──────────────────────────────────────────
 
@@ -70,11 +103,47 @@ export interface ReportLocation {
   region: string
 }
 
+/**
+ * 采集聚合结果（一次"开始记录"收满 20 条有效样本后的产物）
+ *
+ * ─ raw_samples：20 条原始传感器读数，逐条保留（已过稳定判定 + 去离散过滤）
+ * ─ metrics：20 条原始样本的逐字段中位数，作为报告代表读数
+ * ─ grade / grade_index：20 条各自 /evaluate 判级结果取「众数」（最多值）
+ * ─ stability：稳定性诊断，供后端 / 大屏参考
+ */
+export interface CaptureAggregate {
+  /** 20 条原始传感器读数逐条保留 */
+  raw_samples: Metrics[]
+  /** 代表读数：raw_samples 逐字段中位数 */
+  metrics: Metrics
+  /** 众数评级（20 条判级结果出现最多的等级） */
+  grade: GBGrade
+  grade_index: number
+  /** 该众数等级在 20 条中的占比 (0-1)，反映一致性 */
+  grade_agreement: number
+  /** 采集稳定性诊断 */
+  stability: {
+    /** 达到目标所用的总检测次数（含被丢弃的离散/不稳定帧） */
+    total_readings: number
+    /** 被判为离散而丢弃的样本数 */
+    discarded: number
+    /** 各特征变异系数 σ/μ（越小越稳） */
+    cv: Partial<Record<'ph' | 'temperature' | 'ec' | 'turbidity', number>>
+  }
+}
+
 /** POST /reports 请求体 */
 export interface ReportPayload {
   device_id: string
   location: ReportLocation
+  /** 代表读数（= capture.metrics，逐字段中位数） */
   metrics: Metrics
+  /** 用户选择的水体类型 */
+  water_type: WaterType
+  /** 用户确认上传的是真实水体数据（必须为 true 才允许提交） */
+  authenticity_confirmed: boolean
+  /** 20 条原始样本 + 众数评级 + 稳定性诊断 */
+  capture: CaptureAggregate
   /** 用户备注（可选），如 "河水下游约 100m 处取样，有点异味" */
   user_note?: string
   measured_at: string  // ISO8601

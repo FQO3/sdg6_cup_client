@@ -27,21 +27,24 @@
  */
 
 #include "BLEDevice.h"
+#include "SensorSample.h"
 
-#define SERVICE_UUID        "0000FFE0-0000-1000-8000-00805F9B34FB"
-#define MEASUREMENT_UUID    "0000FFE1-0000-1000-8000-00805F9B34FB"
-#define PAYLOAD_BUF_SIZE    128
+#define SERVICE_UUID "0000FFE0-0000-1000-8000-00805F9B34FB"
+#define MEASUREMENT_UUID "0000FFE1-0000-1000-8000-00805F9B34FB"
+#define PAYLOAD_BUF_SIZE 128
 
-BLEService        measureService(SERVICE_UUID);
+BLEService measureService(SERVICE_UUID);
 BLECharacteristic measureChar(MEASUREMENT_UUID);
-BLEAdvertData     advData;
-BLEAdvertData     scanData;
+BLEAdvertData advData;
+BLEAdvertData scanData;
 
 // central 是否已开启 Notify 订阅（由 CCCD 回调维护）
 bool notifyEnabled = false;
 
 const uint32_t SAMPLE_INTERVAL_MS = 700;
 uint32_t lastSample = 0;
+
+int luminance = 150;
 
 // CCCD 回调：central 写入 0x2902 时触发，判断是否开启了 Notify
 void measureCCCDCallback(BLECharacteristic* chr, uint8_t connID, uint16_t cccd) {
@@ -53,30 +56,39 @@ void measureCCCDCallback(BLECharacteristic* chr, uint8_t connID, uint16_t cccd) 
 }
 
 // TODO: 替换为真实传感器采集 + 标定换算
-struct SensorSample { float tds, ph, temperature, turbidity, ec; };
+// struct SensorSample { float tds, ph, temperature, turbidity, ec; };c:\Users\MxzfTn2N8Anx\Desktop\北A\sdg6_cup_client\firmware\cup_ble_bw16\SensorSample.h
 
 SensorSample readSensors() {
   // 示例模拟值；实际接 TDS/pH/温度/浊度模块的 ADC 读数并换算
   SensorSample m;
-  m.tds         = 100 + random(0, 500);
-  m.ph          = 6.5 + random(0, 200) / 100.0;
-  m.temperature = 18 + random(0, 120) / 10.0;
-  m.turbidity   = random(0, 600) / 100.0;
-  m.ec          = 200 + random(0, 1000);
+  // m.tds = 100 + random(0, 500);
+  // m.ph = 6.5 + random(0, 200) / 100.0;
+  // m.temperature = 18 + random(0, 120) / 10.0;
+  // m.turbidity = random(0, 600) / 100.0;
+  // m.ec = 200 + random(0, 1000);
+  m.tds = 200;
+  m.ph = 7.2;
+  m.temperature = 20;
+  m.turbidity = 200;
+  m.ec = 400;
   return m;
 }
 
 String toJson(const SensorSample& m) {
   char buf[PAYLOAD_BUF_SIZE];
   snprintf(buf, sizeof(buf),
-    "{\"tds\":%.0f,\"ph\":%.2f,\"temperature\":%.1f,\"turbidity\":%.2f,\"ec\":%.0f}",
-    m.tds, m.ph, m.temperature, m.turbidity, m.ec);
+           "{\"tds\":%.0f,\"ph\":%.2f,\"temperature\":%.1f,\"turbidity\":%.2f,\"ec\":%.0f}",
+           m.tds, m.ph, m.temperature, m.turbidity, m.ec);
   return String(buf);
 }
 
 void setup() {
-  Serial.begin(115200);
+  pinMode(LED_R, OUTPUT);
+  pinMode(LED_G, OUTPUT);
+  pinMode(LED_B, OUTPUT);
+  led(255,0,0);
 
+  Serial.begin(115200);
   // 广播：Flags + 设备名放主广播；服务 UUID 放扫描响应，避免 31 字节溢出
   advData.addFlags(GAP_ADTYPE_FLAGS_LIMITED | GAP_ADTYPE_FLAGS_BREDR_NOT_SUPPORTED);
   advData.addCompleteName("AquaCup-01");
@@ -96,18 +108,26 @@ void setup() {
   BLE.addService(measureService);
 
   BLE.beginPeripheral();
+  led(0,255,0);
   Serial.println("BLE advertising as AquaCup-01");
+  delay(200);
 }
 
 void loop() {
-  // conn_id 0 为首个连接；断开后 Ameba 会自动恢复广播
-  if (BLE.connected(0) && notifyEnabled &&
-      millis() - lastSample >= SAMPLE_INTERVAL_MS) {
+  led(255, 255, 255);
+    // conn_id 0 为首个连接；断开后 Ameba 会自动恢复广播
+    if (BLE.connected(0) && notifyEnabled && millis() - lastSample >= SAMPLE_INTERVAL_MS) {
     lastSample = millis();
     String payload = toJson(readSensors());
-    measureChar.writeString(payload);   // 写入特征值缓冲
-    measureChar.notify(0);              // 向 conn_id 0 推送 Notify
+    measureChar.writeString(payload);  // 写入特征值缓冲
+    measureChar.notify(0);             // 向 conn_id 0 推送 Notify
     Serial.println(payload);
   }
   delay(10);
+}
+
+void led(int r, int g, int b) {
+  analogWrite(LED_R, r * luminance / 255);
+  digitalWrite(LED_G, g * luminance / 255);
+  analogWrite(LED_B, b * luminance / 255);
 }

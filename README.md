@@ -130,4 +130,4 @@ npm run dev                           # 监听 0.0.0.0:3000
 - [ ] 温度：出厂已校准，一般无需额外操作
 
 ## 数学模型模块
-[跳转链接](/MathModeling-WaterQualification/Water%20Quality%20Pipeline/README.md)
+[跳转链接](/WaterQuality/Water%20Quality%20Pipeline/README.md)

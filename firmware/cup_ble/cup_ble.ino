@@ -22,7 +22,7 @@
 
 BLECharacteristic* measureChar = nullptr;
 bool deviceConnected = false;
-const uint32_t SAMPLE_INTERVAL_MS = 2000;
+const uint32_t SAMPLE_INTERVAL_MS = 700;
 uint32_t lastSample = 0;
 
 class ServerCallbacks : public BLEServerCallbacks {

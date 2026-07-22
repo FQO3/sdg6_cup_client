@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useBle } from '~/composables/useBle'
-import { useDemo, demoLevelFallback } from '~/composables/useWqi'
+import { useDemo } from '~/composables/useWqi'
 import { useEvaluate } from '~/composables/useEvaluate'
 import { useCapture } from '~/composables/useCapture'
 import { useReports } from '~/composables/useReports'
@@ -22,9 +22,9 @@ const demoOn = ref(config.public.demoMode)
 
 // ───── 链路 A：实时判级 ─────
 
-/** Demo 模式用模拟数据，BLE 模式用真实聚合数据触发 /evaluate */
+/** Demo 模式用模拟聚合数据，BLE 模式用真实聚合数据触发 /evaluate */
 const batchedSource = computed<Metrics | null>(() =>
-  demoOn.value ? demo.metrics.value : ble.batchedMetrics.value,
+  demoOn.value ? demo.batchedMetrics.value : ble.batchedMetrics.value,
 )
 
 /** 当前设备 ID：Demo 用固定名，BLE 用真实设备名 */
@@ -35,21 +35,10 @@ const deviceId = computed(() =>
 /** 链路 A 判级 composable：监听 batchedSource 自动调 /evaluate */
 const evaluate = useEvaluate(batchedSource, deviceId)
 
-/** Demo 模式：本地简化判级，不调后端 */
-const demoEval = computed(() =>
-  demo.metrics.value ? demoLevelFallback(demo.metrics.value) : null,
-)
-
-/** 当前显示的 GB 等级：Demo 用本地，BLE 用 Pipeline 返回 */
-const displayGrade = computed<GBGrade | null>(() =>
-  demoOn.value ? demoEval.value?.grade ?? null : evaluate.result.value?.grade ?? null,
-)
-const displayGradeIndex = computed<number | null>(() =>
-  demoOn.value ? demoEval.value?.grade_index ?? null : evaluate.result.value?.grade_index ?? null,
-)
-const displayConfidence = computed<number | null>(() =>
-  demoOn.value ? demoEval.value?.confidence ?? null : evaluate.result.value?.confidence ?? null,
-)
+/** 当前显示的 GB 等级：Demo 和 BLE 均来自统一 Pipeline 返回 */
+const displayGrade = computed<GBGrade | null>(() => evaluate.result.value?.grade ?? null)
+const displayGradeIndex = computed<number | null>(() => evaluate.result.value?.grade_index ?? null)
+const displayConfidence = computed<number | null>(() => evaluate.result.value?.confidence ?? null)
 
 // ───── 6 色方案（GB 等级背景色） ─────
 const GRADE_COLORS: Record<number, { bg: string; text: string }> = {
@@ -67,7 +56,7 @@ const displayMetrics = computed<Metrics | null>(() =>
 )
 
 // Demo 开关联动
-watch(demoOn, (on) => (on ? demo.start() : demo.stop()))
+watch(demoOn, (on) => (on ? demo.start() : demo.stop()), { immediate: true })
 
 /** Demo 数据模式：random=全随机（跳跃）；stable=小幅摆动（可进入稳定态测试采集） */
 const demoStable = ref(false)
@@ -201,8 +190,7 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
       <p v-if="displayConfidence != null" class="confidence">
         模型置信度：<b>{{ (displayConfidence * 100).toFixed(2) }}%</b>
       </p>
-      <small v-if="!demoOn">（每 3 帧评测一次，随机森林模型 · 仅供参考）</small>
-      <small v-else>（Demo 本地简化判级）</small>
+      <small>（每 3 帧/模拟批次评测一次，统一调用后端随机森林模型 · 仅供参考）</small>
     </section>
 
     <!-- ═══ 采集 / 提交报告区 ═══ -->

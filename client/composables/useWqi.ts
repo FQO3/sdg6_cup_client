@@ -1,16 +1,23 @@
 import { ref } from 'vue'
-import type { Metrics, GBGrade } from '~/types/reading'
-import { GB_GRADE_ORDER } from '~/types/reading'
+import type { Metrics } from '~/types/reading'
 
 /**
- * Demo Mode：无硬件时生成模拟指标（4 参数：temperature, ph, ec, turbidity）。
- * 由 runtimeConfig.public.demoMode 或页面开关控制。
+ * Demo Mode：无硬件时模拟“传感器原始帧”。
  *
- * ⚠️ Demo Mode 不调后端 /evaluate，用内置简化映射直接显示 GB 等级，
- *    使其在不连 BLE 时也能看到完整 UI 效果。
+ * 重要：Demo 只负责生成与 ESP32/BLE 相同结构的 Metrics 数据，
+ * 不做本地评级、不绕过后端模型、不绕过采集状态机。
+ *
+ * 链路保持与真实模式一致：
+ *   模拟 raw frame → 3 帧中位数聚合 batchedMetrics → /api/evaluate → useCapture/useReports
  */
-/** Demo 模式：'random'=全随机（老行为）；'stable'=围绕基准小幅摆动，可进入稳定态 */
+
+/** Demo 模式：'random'=全随机（跳跃）；'stable'=围绕基准小幅摆动，可进入稳定态 */
 export type DemoMode = 'random' | 'stable'
+
+/** 聚合窗口帧数：与 useBle 保持一致 */
+const WINDOW_SIZE = 3
+const NUMERIC_KEYS = ['temperature', 'ph', 'ec', 'turbidity'] as const
+type NumericMetricKey = (typeof NUMERIC_KEYS)[number]
 
 /** 稳定模式默认基准读数（可通过 setBase 覆盖）——一杯自来水量级 */
 const DEFAULT_STABLE_BASE: Metrics = {
@@ -22,23 +29,42 @@ const DEFAULT_STABLE_BASE: Metrics = {
 } as Metrics
 
 /**
- * 稳定模式各特征的**摆动幅度**（在检测误差允许内的绝对波动）。
+ * 稳定模式各特征的摆动幅度（在检测误差允许内的绝对波动）。
  * 幅度控制在 useCapture 判稳 CV 阈值之内（ph/temp 0.03、ec 0.08、turbidity 0.15），
- * 使连续读数能被判为「稳定」从而进入去离散 + 收样本流程。
+ * 使连续读数能被判为“稳定”从而进入去离散 + 收样本流程。
  */
-const STABLE_JITTER: Record<'temperature' | 'ph' | 'ec' | 'turbidity', number> = {
+const STABLE_JITTER: Record<NumericMetricKey, number> = {
   temperature: 0.15, // ±0.15 ℃
   ph: 0.03,          // ±0.03
   ec: 4,             // ±4 μS/cm
   turbidity: 0.08,   // ±0.08 NTU
 }
 
+/** 与 BLE 侧一致：逐字段取 3 帧中位数，天然抗单点异常 */
+function medianOfFrames(frames: Metrics[]): Metrics {
+  const result: Metrics = {}
+  for (const k of NUMERIC_KEYS) {
+    const vals = frames
+      .map((f) => f[k])
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+    if (!vals.length) continue
+    const sorted = [...vals].sort((a, b) => a - b)
+    const mid = Math.floor(sorted.length / 2)
+    result[k] = sorted[mid]
+  }
+  return result
+}
+
 export function useDemo() {
   const running = ref(false)
+  /** 最新一帧模拟原始数据：等价于 BLE rawMetrics，用于 MetricCard 即时展示 */
   const metrics = ref<Metrics | null>(null)
+  /** 每 3 帧中位数聚合结果：等价于 BLE batchedMetrics，用于触发 /api/evaluate 与 useCapture */
+  const batchedMetrics = ref<Metrics | null>(null)
   const mode = ref<DemoMode>('random')
   const base = ref<Metrics>({ ...DEFAULT_STABLE_BASE })
   let timer: ReturnType<typeof setInterval> | null = null
+  const frameBuf: Metrics[] = []
 
   function rand(min: number, max: number, d = 1) {
     return +(min + Math.random() * (max - min)).toFixed(d)
@@ -49,7 +75,7 @@ export function useDemo() {
     return +(center + (Math.random() * 2 - 1) * a).toFixed(d)
   }
 
-  /** 全随机读数（老 Demo 行为，数据跳跃、无法稳定） */
+  /** 全随机读数：数据跳跃，通常不容易进入稳定采集 */
   function tickRandom(): Metrics {
     return {
       temperature: rand(10, 35, 1),   // ℃
@@ -77,61 +103,51 @@ export function useDemo() {
     return mode.value === 'stable' ? tickStable() : tickRandom()
   }
 
+  function pushFrame(frame: Metrics) {
+    metrics.value = frame
+    frameBuf.push(frame)
+
+    if (frameBuf.length >= WINDOW_SIZE) {
+      const batch = frameBuf.slice(-WINDOW_SIZE)
+      const agg = medianOfFrames(batch)
+      // 与 BLE 侧保持一致：wet 透传最近一帧
+      if (typeof frame.wet === 'boolean') agg.wet = frame.wet
+      batchedMetrics.value = agg
+      // 保留最后 1 帧，保持滑动窗口连续性
+      frameBuf.splice(0, frameBuf.length - 1)
+    }
+  }
+
+  function resetBatch() {
+    frameBuf.length = 0
+    batchedMetrics.value = null
+  }
+
   /** 设置稳定模式基准读数（可只传部分字段，其余保留） */
   function setBase(partial: Partial<Metrics>) {
     base.value = { ...base.value, ...partial } as Metrics
   }
 
-  /** 切换 Demo 模式（运行中切换即时生效） */
+  /** 切换 Demo 模式（运行中切换即时生效，并清空旧模式的聚合缓冲） */
   function setMode(m: DemoMode) {
     mode.value = m
-    if (running.value) metrics.value = tick()
+    resetBatch()
+    if (running.value) pushFrame(tick())
   }
 
   function start() {
     running.value = true
-    metrics.value = tick()
-    timer = setInterval(() => (metrics.value = tick()), 2000)
+    resetBatch()
+    pushFrame(tick())
+    timer = setInterval(() => pushFrame(tick()), 700)
   }
 
   function stop() {
     running.value = false
     if (timer) clearInterval(timer)
     timer = null
+    frameBuf.length = 0
   }
 
-  return { running, metrics, mode, base, setMode, setBase, start, stop }
-}
-
-/**
- * Demo Mode 用的简化 fallback 判级（不调后端，仅演示 UI）
- * ─ 正常 BLE 模式下由 Water Quality Pipeline 随机森林判级，不走此函数。
- *
- * 模拟逻辑：用 ph 和 ec 的粗略范围估算 GB 等级（娱乐性质，非科学判级）
- */
-export function demoLevelFallback(m: Metrics): {
-  grade: GBGrade
-  grade_index: number
-  confidence: number
-} {
-  const ph = (m.ph as number) ?? 7
-  const ec = (m.ec as number) ?? 300
-  const turb = (m.turbidity as number) ?? 5
-
-  // 粗略评分 heuristic（仅用于 Demo UI 动画效果）
-  let score = 0
-  if (ph >= 6.5 && ph <= 8.5) score += 2
-  else if (ph >= 6 && ph <= 9) score += 1
-  if (ec < 400) score += 2
-  else if (ec < 800) score += 1
-  if (turb < 5) score += 1
-  if (turb < 15) score += 1
-
-  // 映射到 GB 等级（越低越好 → 0 = Ⅰ类）
-  const grade_index = Math.max(0, Math.min(5, 5 - score))
-  return {
-    grade: GB_GRADE_ORDER[grade_index],
-    grade_index,
-    confidence: 0.75 + Math.random() * 0.15,  // Demo 假置信度
-  }
+  return { running, metrics, batchedMetrics, mode, base, setMode, setBase, start, stop }
 }

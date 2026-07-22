@@ -5,7 +5,7 @@ import { useDemo, demoLevelFallback } from '~/composables/useWqi'
 import { useEvaluate } from '~/composables/useEvaluate'
 import { useReports } from '~/composables/useReports'
 import type { Metrics, GBGrade, ReportPayload } from '~/types/reading'
-import { GB_GRADE_ORDER, GB_GRADE_LABELS } from '~/types/reading'
+import { GB_GRADE_ORDER, GB_GRADE_LABELS, GB_GRADE_TAGLINES } from '~/types/reading'
 
 const config = useRuntimeConfig()
 const ble = useBle()
@@ -151,7 +151,7 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
     >
       <h2>实时水质评估（GB 3838-2002）</h2>
       <p class="grade-text" :style="{ color: GRADE_COLORS[displayGradeIndex ?? 3]?.text }">
-        <b>{{ displayGrade }}</b>
+        <b>{{ displayGrade }} - {{ GB_GRADE_TAGLINES[displayGrade] }}</b>
       </p>
       <p class="grade-desc">{{ GB_GRADE_LABELS[displayGrade] }}</p>
       <p v-if="displayConfidence != null" class="confidence">

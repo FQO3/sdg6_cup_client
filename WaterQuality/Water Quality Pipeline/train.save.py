@@ -30,6 +30,11 @@ DIRECTION = {
     '浊度(NTU)': 'down',
 }
 
+# 数据集划分比例：训练集 : 测试集 = 8 : 2
+TRAIN_RATIO = 0.8
+TEST_RATIO = 0.2
+RANDOM_STATE = 42
+
 # ── 读数据 ────────────────────────────────────
 df = pd.read_csv(CSV)
 y = df['水质类别'].map({v: i for i, v in enumerate(ORDER)}).values
@@ -64,7 +69,8 @@ def train_one(feats, name):
     print(f'  互信息 (bits): {mi}')
 
     Xtr, Xte, ytr, yte = train_test_split(
-        X, y, test_size=0.25, random_state=42, stratify=y) # type: ignore
+        X, y, test_size=TEST_RATIO, random_state=RANDOM_STATE, stratify=y) # type: ignore
+    print(f'  数据集划分: 训练集 {len(Xtr)} 条 ({TRAIN_RATIO:.0%}), 测试集 {len(Xte)} 条 ({TEST_RATIO:.0%})')
 
     sc = StandardScaler().fit(Xtr)
     Xtr_s = sc.transform(Xtr)

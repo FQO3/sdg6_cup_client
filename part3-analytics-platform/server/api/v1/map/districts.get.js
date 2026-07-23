@@ -1,0 +1,69 @@
+import { db } from '../../../../src/db.js';
+import { toBool } from '../../../../src/utils/common.js';
+import { gradeColor } from '../../../../src/utils/constants.js';
+import { defineApiHandler, getApiQuery, sendOk } from '../../../utils/api.js';
+
+export default defineApiHandler((event) => {
+  const query = getApiQuery(event);
+  const city = query.city || undefined;
+  const district = query.district || undefined;
+  const realOnly = toBool(query.real_only, false);
+  const conditions = [];
+  const params = {};
+  if (city) { conditions.push('city = @city'); params.city = city; }
+  if (district) { conditions.push('district = @district'); params.district = district; }
+  if (realOnly) conditions.push('authenticity_confirmed = 1 AND is_seed = 0');
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const summary = db.prepare(`
+    SELECT COUNT(*) AS n,
+      SUM(CASE WHEN authenticity_confirmed = 1 AND is_seed = 0 THEN 1 ELSE 0 END) AS real_n,
+      AVG(grade_index) AS avg_grade_index,
+      AVG(ph) AS avg_ph,
+      AVG(tds) AS avg_tds,
+      AVG(turbidity) AS avg_turbidity,
+      AVG(ec) AS avg_ec,
+      AVG(temperature) AS avg_temperature,
+      SUM(CASE WHEN grade_index <= 2 THEN 1 ELSE 0 END) AS pass_n,
+      SUM(CASE WHEN grade_index >= 4 THEN 1 ELSE 0 END) AS polluted_n
+    FROM reports ${where}
+  `).get(params);
+
+  const gradeRows = db.prepare(`
+    SELECT grade, grade_index, COUNT(*) AS count
+    FROM reports ${where}
+    GROUP BY grade, grade_index
+    ORDER BY grade_index ASC
+  `).all(params);
+
+  const districtRows = db.prepare(`
+    SELECT district, COUNT(*) AS count, AVG(grade_index) AS avg_grade_index
+    FROM reports ${where}
+    GROUP BY district
+    ORDER BY count DESC
+    LIMIT 20
+  `).all(params);
+
+  const n = summary.n || 0;
+  return sendOk(event, {
+    scope: { city: city || null, district: district || null, real_only: realOnly },
+    n,
+    real_n: summary.real_n || 0,
+    pass_rate: n ? Number(((summary.pass_n || 0) / n).toFixed(4)) : 0,
+    polluted_count: summary.polluted_n || 0,
+    avg_grade_index: summary.avg_grade_index === null ? null : Number(summary.avg_grade_index.toFixed(2)),
+    averages: {
+      ph: summary.avg_ph === null ? null : Number(summary.avg_ph.toFixed(2)),
+      tds: summary.avg_tds === null ? null : Number(summary.avg_tds.toFixed(2)),
+      turbidity: summary.avg_turbidity === null ? null : Number(summary.avg_turbidity.toFixed(2)),
+      ec: summary.avg_ec === null ? null : Number(summary.avg_ec.toFixed(2)),
+      temperature: summary.avg_temperature === null ? null : Number(summary.avg_temperature.toFixed(2))
+    },
+    grade_distribution: gradeRows.map((row) => ({ ...row, color: gradeColor(row.grade_index) })),
+    districts: districtRows.map((row) => ({
+      district: row.district || 'unknown',
+      count: row.count,
+      avg_grade_index: row.avg_grade_index === null ? null : Number(row.avg_grade_index.toFixed(2))
+    }))
+  });
+});

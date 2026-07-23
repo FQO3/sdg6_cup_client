@@ -127,3 +127,10 @@ def _to_item(row: sqlite3.Row) -> RecordItem:
         content=row["content"],
         created_at=row["created_at"],
     )
+
+
+def clear_records() -> int:
+    """清空所有生成记录, 返回删除的行数。"""
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM generations")
+        return cur.rowcount

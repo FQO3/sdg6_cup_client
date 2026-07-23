@@ -122,3 +122,6 @@ curl http://localhost:8090/api/v1/insights/records/1
 - 密钥仅存后端 `.env` / 环境变量（`DEEPSEEK_API_KEY`，即 LLM 中转 key），已被 `.gitignore` 忽略，代码不硬编码。
 - 大屏/客户端不直连 LLM，一律经本服务（或 Express）代理，统一鉴权/限流/缓存。
 - 已设 `REQUEST_TIMEOUT=30s`；前端配 loading 动效；缓存控制 token 消耗。
+
+## 主页面
+[跳转链接](/README.md)

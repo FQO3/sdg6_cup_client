@@ -131,3 +131,6 @@ npm run dev                           # 监听 0.0.0.0:3000
 
 ## 数学模型模块
 [跳转链接](/WaterQuality/Water%20Quality%20Pipeline/README.md)
+
+## LLM水质描述服务
+[跳转链接](/Services/LLM/README.md)

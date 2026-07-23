@@ -213,5 +213,5 @@ python evaluate.py --interactive
 - **评价**：二次加权 Cohen's Kappa + 混淆矩阵 + MAE
 - **理论**：互信息 + Fano 不等式（信息论错误率下界）
 
-## 主模块
+## 主页面
 [跳转链接](/README.md)

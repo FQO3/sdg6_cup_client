@@ -149,177 +149,576 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
 
 
 <template>
-  <main class="wrap">
-    <h1>{{ config.public.appName }} · 水质检测</h1>
-
-    <!-- ═══ 连接区 ═══ -->
-    <section class="bar">
-      <label><input type="checkbox" v-model="demoOn" /> Demo Mode（无硬件模拟）</label>
-      <label v-if="demoOn" class="sub">
-        <input type="checkbox" v-model="demoStable" /> 稳定数据（小幅摆动，可测采集稳定态）
-      </label>
-      <template v-if="!demoOn">
-        <button v-if="!ble.connected.value" @click="ble.connect">
-          {{ ble.supported.value ? '连接水杯 (BLE)' : 'BLE 不可用' }}
-        </button>
-        <button v-else @click="ble.disconnect">
-          断开 · {{ ble.deviceName.value }}
-        </button>
-      </template>
-      <p v-if="ble.error.value" class="err">{{ ble.error.value }}</p>
-    </section>
-
-    <!-- ═══ 水位 / 连接状态 ═══ -->
-    <p v-if="!demoOn && ble.connected.value" class="wet">
-      {{ displayMetrics?.wet ? '✅ 水杯已浸没' : '⚠️ 水杯未浸入水中，请浸没后检测' }}
-    </p>
-
-    <!-- ═══ 指标卡片 + 实时判级 ═══ -->
-    <MetricCard :metrics="displayMetrics" />
-
-    <section
-      v-if="displayGrade"
-      class="eval"
-      :style="{
-        background: GRADE_COLORS[displayGradeIndex ?? 3]?.bg ?? '#f5f5f5',
-        borderLeft: `4px solid ${GRADE_COLORS[displayGradeIndex ?? 3]?.text ?? '#999'}`,
-      }"
-    >
-      <h2>实时水质评估（GB 3838-2002）</h2>
-      <p class="grade-text" :style="{ color: GRADE_COLORS[displayGradeIndex ?? 3]?.text }">
-        <b>{{ displayGrade }} - {{ GB_GRADE_TAGLINES[displayGrade] }}</b>
-      </p>
-      <p class="grade-desc">{{ GB_GRADE_LABELS[displayGrade] }}</p>
-      <p v-if="displayConfidence != null" class="confidence">
-        模型置信度：<b>{{ (displayConfidence * 100).toFixed(2) }}%</b>
-      </p>
-      <small>（每 3 帧/模拟批次评测一次，统一调用后端随机森林模型 · 仅供参考）</small>
-    </section>
-
-    <!-- ═══ 采集 / 提交报告区 ═══ -->
-    <section class="report-section">
-      <h2>提交检测报告</h2>
-
-      <!-- 阶段 0：idle — 开始记录 -->
-      <template v-if="capture.status.value === 'idle'">
-        <p class="hint">
-          点击「开始记录」后将连续检测水质，待读数基本稳定并去除离散数据后，
-          自动收集 {{ capture.target }} 条有效样本。
-        </p>
-        <button class="primary" :disabled="!displayMetrics" @click="onStartCapture">
-          {{ displayMetrics ? '开始记录' : '等待水质数据…' }}
-        </button>
-      </template>
-
-      <!-- 阶段 1：collecting — 进度 -->
-      <template v-else-if="capture.status.value === 'collecting'">
-        <p class="cap-stage">
-          {{ capture.stableReached.value ? '✅ 水质已基本稳定，正在采集有效样本…' : '⏳ 正在等待水质稳定…' }}
-        </p>
-        <div class="cap-bar">
-          <div class="cap-bar-fill" :style="{ width: (capture.progress.value * 100).toFixed(0) + '%' }" />
+  <div class="dashboard-shell">
+    <!-- ═══════════ 左侧悬浮导航 ═══════════ -->
+    <aside class="sidebar-panel">
+      <div class="brand-block">
+        <span class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 36 36" width="34" height="34">
+            <defs>
+              <linearGradient id="logoWater" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#7ee4ff" />
+                <stop offset="1" stop-color="#168bd2" />
+              </linearGradient>
+            </defs>
+            <path d="M18 3C18 3 7 16 7 23a11 11 0 0022 0C29 16 18 3 18 3z" fill="url(#logoWater)" />
+            <path d="M13 23c3 2.2 7 2.2 10 0" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".9" />
+            <circle cx="22" cy="13" r="2.1" fill="#eaffff" opacity=".95" />
+          </svg>
+        </span>
+        <div>
+          <strong>{{ config.public.appName }}</strong>
+          <em>·水质检测</em>
         </div>
-        <p class="cap-meta">
-          有效样本 <b>{{ capture.collected.value }} / {{ capture.target }}</b>
-          · 已检测 {{ capture.totalReadings.value }} 次
-          · 丢弃离散 {{ capture.discarded.value }} 条
-        </p>
-        <button class="ghost" @click="capture.cancel">取消采集</button>
-      </template>
+      </div>
 
-      <!-- 阶段 error -->
-      <template v-else-if="capture.status.value === 'error'">
-        <p class="err">{{ capture.errorMsg.value }}</p>
-        <button class="primary" :disabled="!displayMetrics" @click="onStartCapture">重新开始记录</button>
-      </template>
+      <nav class="quick-menu" aria-label="快捷功能菜单">
+        <a class="quick-item active">
+          <span>📊</span><b>Dashboard</b>
+        </a>
+        <a class="quick-item">
+          <span>💧</span><b>实时数据</b>
+        </a>
+        <a class="quick-item">
+          <span>📝</span><b>提交报告</b>
+        </a>
+        <NuxtLink to="/history" class="quick-item">
+          <span>🕘</span><b>历史记录</b>
+        </NuxtLink>
+      </nav>
 
-      <!-- 阶段 2：done — 附加信息表单 -->
-      <template v-else-if="capture.status.value === 'done' && capture.aggregate.value">
-        <p class="cap-stage">
-          ✅ 采集完成：共 {{ capture.aggregate.value.raw_samples.length }} 条有效样本
-          · 判级 <b>{{ capture.aggregate.value.grade }}</b>
-          （一致率 {{ (capture.aggregate.value.grade_agreement * 100).toFixed(0) }}%）
-        </p>
-
-        <label class="field-label">水体类型（必选）</label>
-        <div class="water-types">
-          <label v-for="wt in WATER_TYPE_ORDER" :key="wt" class="wt-opt">
-            <input type="radio" name="waterType" :value="wt" v-model="waterType" />
-            {{ WATER_TYPE_LABELS[wt] }}
-          </label>
-        </div>
-
-        <label class="field-label">附加说明（可选）</label>
-        <textarea
-          v-model="userNote"
-          placeholder="如取样地点、异味/颜色等观察"
-          rows="2"
-          class="note-input"
-        />
-
-        <label class="confirm">
-          <input type="checkbox" v-model="authenticityConfirmed" />
-          我确认本次上传的是<b>真实采集的水体数据</b>，未经伪造。
+      <div class="side-control">
+        <label class="demo-switch">
+          <input type="checkbox" v-model="demoOn" />
+          <span>Demo 模式（无硬件模拟）</span>
         </label>
+        <label v-if="demoOn" class="demo-switch sub">
+          <input type="checkbox" v-model="demoStable" />
+          <span>稳定数据（可测采集稳定态）</span>
+        </label>
+        <template v-if="!demoOn">
+          <button v-if="!ble.connected.value" class="btn-ble" @click="ble.connect">
+            {{ ble.supported.value ? '连接水杯 BLE' : 'BLE 不可用' }}
+          </button>
+          <button v-else class="btn-ble connected" @click="ble.disconnect">
+            断开 · {{ ble.deviceName.value }}
+          </button>
+        </template>
+      </div>
+    </aside>
 
-        <button class="primary" :disabled="!canSubmit" @click="onSubmit">
-          {{ submitting ? '提交中…' : '提交报告（入库 ⬆）' }}
-        </button>
-        <button class="ghost" :disabled="submitting" @click="capture.cancel">放弃本次采集</button>
-      </template>
-    </section>
+    <!-- ═══════════ 右侧主区 ═══════════ -->
+    <main class="main-area">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Water Environment Intelligence</p>
+          <h1>Dashboard</h1>
+        </div>
+        <div class="top-actions">
+          <span v-if="ble.error.value" class="err">{{ ble.error.value }}</span>
+          <span class="status-pill" :class="{ live: displayMetrics }">
+            <i></i>{{ displayMetrics ? '数据接入中' : '未接入' }}
+          </span>
+          <NuxtLink to="/history" class="ghost-btn">历史记录</NuxtLink>
+        </div>
+      </header>
 
-    <section
-      v-if="reportResult"
-      class="result"
-      :style="{
-        background: GRADE_COLORS[reportResult.grade_index]?.bg ?? '#f5f5f5',
-        borderLeft: `4px solid ${GRADE_COLORS[reportResult.grade_index]?.text ?? '#999'}`,
-      }"
-    >
-      <h2>报告已提交</h2>
-      <p>ID：<b>{{ reportResult.report_id }}</b></p>
-      <p>等级：<b>{{ reportResult.grade }}</b> · {{ GB_GRADE_LABELS[reportResult.grade] }}</p>
-      <details v-if="reportResult.llm_report">
-        <summary>LLM 分析报告</summary>
-        <div class="llm" v-html="reportResult.llm_report" />
-      </details>
-    </section>
+      <!-- ─── Hero ─── -->
+      <section class="hero-card">
+        <div class="hero-copy">
+          <span class="hero-tag">Smart Cup · GB 3838 云评级</span>
+          <h2>饮水安全，一杯即测</h2>
+          <p>智能水杯实时采集，云端随机森林模型评估水质等级</p>
+          <div class="wait-box">
+            <span v-if="!displayMetrics" class="dot-pulse"></span>
+            <span>{{ displayMetrics ? '数据已接入，检测中…' : '等待数据 · 连接水杯或开启 Demo' }}</span>
+          </div>
+          <p v-if="!demoOn && ble.connected.value" class="wet-tip">
+            {{ displayMetrics?.wet ? '✅ 水杯已浸没' : '⚠️ 水杯未浸入水中，请浸没后检测' }}
+          </p>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <svg viewBox="0 0 170 150" width="185" height="165">
+            <defs>
+              <linearGradient id="cupGlass" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="rgba(255,255,255,.92)" />
+                <stop offset="1" stop-color="rgba(210,244,255,.42)" />
+              </linearGradient>
+              <linearGradient id="cupWater" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#80e8ff" />
+                <stop offset="1" stop-color="#178bd4" />
+              </linearGradient>
+            </defs>
+            <circle cx="126" cy="34" r="18" fill="rgba(255,255,255,.28)" />
+            <circle cx="42" cy="38" r="10" fill="rgba(220,255,255,.45)" />
+            <path d="M52 34h66l-7 92a18 18 0 01-18 16H77a18 18 0 01-18-16z" fill="url(#cupGlass)" stroke="#fff" stroke-width="4" />
+            <path d="M61 86c14-10 28 8 43-1 5-3 9-5 12-5l-4 46a18 18 0 01-18 16H77a18 18 0 01-18-16z" fill="url(#cupWater)" opacity=".86" />
+            <path d="M65 75c12-7 24 6 37 0" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".9" />
+            <path d="M121 67c9 0 16 7 16 16s-7 16-16 16" fill="none" stroke="rgba(255,255,255,.75)" stroke-width="8" stroke-linecap="round" />
+            <path d="M85 12s-12 14-12 22a12 12 0 0024 0c0-8-12-22-12-22z" fill="#dfffff" opacity=".95" />
+          </svg>
+        </div>
+      </section>
 
-    <NuxtLink to="/history">查看历史记录 →</NuxtLink>
-  </main>
+      <!-- ─── 主卡片区：实时检测 + 采集/提交 ─── -->
+      <section class="card-grid primary-grid">
+        <!-- 实时水质检测数据 -->
+        <article class="float-card data-card">
+          <div class="card-title">
+            <span class="icon-bubble">
+              <svg viewBox="0 0 30 30" width="22" height="22" aria-hidden="true">
+                <path d="M15 3s-9 10-9 17a9 9 0 0018 0C24 13 15 3 15 3z" fill="#168bd4" />
+                <path d="M10 20c3 2 7 2 10 0" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" />
+              </svg>
+            </span>
+            <div>
+              <h3>实时水质检测数据</h3>
+              <small>智能水杯传感器指标</small>
+            </div>
+          </div>
+
+          <MetricCard :metrics="displayMetrics" />
+
+          <div
+            v-if="displayGrade"
+            class="eval"
+            :style="{
+              background: GRADE_COLORS[displayGradeIndex ?? 3]?.bg ?? '#f5f5f5',
+              borderLeft: `4px solid ${GRADE_COLORS[displayGradeIndex ?? 3]?.text ?? '#999'}`,
+            }"
+          >
+            <p class="grade-text" :style="{ color: GRADE_COLORS[displayGradeIndex ?? 3]?.text }">
+              <b>{{ displayGrade }} · {{ GB_GRADE_TAGLINES[displayGrade] }}</b>
+            </p>
+            <p class="grade-desc">{{ GB_GRADE_LABELS[displayGrade] }}</p>
+            <p v-if="displayConfidence != null" class="confidence">
+              模型置信度：<b>{{ (displayConfidence * 100).toFixed(2) }}%</b>
+            </p>
+            <small>（每 3 帧/模拟批次评测一次，统一调用后端随机森林模型 · 仅供参考）</small>
+          </div>
+        </article>
+
+        <!-- 采集 / 提交报告 -->
+        <article class="float-card feedback-card">
+          <div class="card-title">
+            <span class="icon-bubble">📝</span>
+            <div>
+              <h3>提交检测报告</h3>
+              <small>采集稳定样本 · 记录水体信息</small>
+            </div>
+          </div>
+
+          <!-- 阶段 0：idle -->
+          <template v-if="capture.status.value === 'idle'">
+            <p class="hint">
+              点击「开始记录」后将连续检测水质，待读数基本稳定并去除离散数据后，
+              自动收集 {{ capture.target }} 条有效样本。
+            </p>
+            <button class="primary" :disabled="!displayMetrics" @click="onStartCapture">
+              {{ displayMetrics ? '开始记录 ▶' : '等待水质数据…' }}
+            </button>
+          </template>
+
+          <!-- 阶段 1：collecting -->
+          <template v-else-if="capture.status.value === 'collecting'">
+            <p class="cap-stage">
+              {{ capture.stableReached.value ? '✅ 水质已基本稳定，正在采集有效样本…' : '⏳ 正在等待水质稳定…' }}
+            </p>
+            <div class="cap-bar">
+              <div class="cap-bar-fill" :style="{ width: (capture.progress.value * 100).toFixed(0) + '%' }" />
+            </div>
+            <p class="cap-meta">
+              有效样本 <b>{{ capture.collected.value }} / {{ capture.target }}</b>
+              · 已检测 {{ capture.totalReadings.value }} 次
+              · 丢弃离散 {{ capture.discarded.value }} 条
+            </p>
+            <button class="ghost" @click="capture.cancel">取消采集</button>
+          </template>
+
+          <!-- 阶段 error -->
+          <template v-else-if="capture.status.value === 'error'">
+            <p class="err">{{ capture.errorMsg.value }}</p>
+            <button class="primary" :disabled="!displayMetrics" @click="onStartCapture">重新开始记录</button>
+          </template>
+
+          <!-- 阶段 2：done — 附加信息表单 -->
+          <template v-else-if="capture.status.value === 'done' && capture.aggregate.value">
+            <p class="cap-stage">
+              ✅ 采集完成：共 {{ capture.aggregate.value.raw_samples.length }} 条有效样本
+              · 判级 <b>{{ capture.aggregate.value.grade }}</b>
+              （一致率 {{ (capture.aggregate.value.grade_agreement * 100).toFixed(0) }}%）
+            </p>
+
+            <label class="field-label">水体类型（必选）</label>
+            <div class="water-types">
+              <label
+                v-for="wt in WATER_TYPE_ORDER"
+                :key="wt"
+                class="wt-opt"
+                :class="{ checked: waterType === wt }"
+              >
+                <input type="radio" name="waterType" :value="wt" v-model="waterType" />
+                {{ WATER_TYPE_LABELS[wt] }}
+              </label>
+            </div>
+
+            <label class="field-label">附加说明（可选）</label>
+            <textarea
+              v-model="userNote"
+              placeholder="如取样地点、异味/颜色等观察"
+              rows="2"
+              class="note-input"
+            />
+
+            <label class="confirm" :class="{ checked: authenticityConfirmed }">
+              <input type="checkbox" v-model="authenticityConfirmed" />
+              <span>我确认本次上传的是<b>真实采集的水体数据</b>，未经伪造。</span>
+            </label>
+
+            <button class="primary" :disabled="!canSubmit" @click="onSubmit">
+              {{ submitting ? '提交中…' : '提交报告（入库 ⬆）' }}
+            </button>
+            <button class="ghost" :disabled="submitting" @click="capture.cancel">放弃本次采集</button>
+          </template>
+
+          <!-- 提交结果 -->
+          <div
+            v-if="reportResult"
+            class="result"
+            :style="{
+              background: GRADE_COLORS[reportResult.grade_index]?.bg ?? '#f5f5f5',
+              borderLeft: `4px solid ${GRADE_COLORS[reportResult.grade_index]?.text ?? '#999'}`,
+            }"
+          >
+            <b>✅ 报告已提交</b>
+            <p>ID：<b>{{ reportResult.report_id }}</b></p>
+            <p>等级：<b>{{ reportResult.grade }}</b> · {{ GB_GRADE_LABELS[reportResult.grade] }}</p>
+            <details v-if="reportResult.llm_report">
+              <summary>LLM 分析报告</summary>
+              <div class="llm" v-html="reportResult.llm_report" />
+            </details>
+          </div>
+        </article>
+      </section>
+
+      <!-- ─── 次卡片区：波形图 + 历史入口 ─── -->
+      <section class="card-grid secondary-grid">
+        <article class="white-card chart-card">
+          <div class="card-title compact">
+            <span class="icon-bubble pale">📈</span>
+            <div>
+              <h3>水质数据可视化波形图表</h3>
+              <small>实时趋势监测</small>
+            </div>
+          </div>
+          <svg class="wave-chart" viewBox="0 0 360 140" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#36bce8" stop-opacity=".42" />
+                <stop offset="1" stop-color="#36bce8" stop-opacity="0" />
+              </linearGradient>
+              <linearGradient id="chartLine" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#168bd4" />
+                <stop offset="1" stop-color="#23c7c3" />
+              </linearGradient>
+            </defs>
+            <path d="M0 90 C32 48 58 120 92 76 S154 42 190 74 S248 112 286 60 S338 46 360 68 L360 140 L0 140 Z" fill="url(#chartFill)" />
+            <path d="M0 90 C32 48 58 120 92 76 S154 42 190 74 S248 112 286 60 S338 46 360 68" fill="none" stroke="url(#chartLine)" stroke-width="4" stroke-linecap="round" />
+            <path d="M0 108 C42 82 76 104 112 94 S180 80 216 96 S296 124 360 92" fill="none" stroke="#8bdff3" stroke-width="2" stroke-dasharray="8 10" opacity=".9" />
+          </svg>
+        </article>
+
+        <article class="white-card history-card">
+          <div class="card-title compact">
+            <span class="icon-bubble pale">🕘</span>
+            <div>
+              <h3>历史水质检测记录列表</h3>
+              <small>过往检测数据归档</small>
+            </div>
+          </div>
+          <div class="history-list">
+            <div class="history-row">
+              <span class="level-dot safe"></span>
+              <div><b>最近检测</b><small>{{ displayMetrics ? '当前设备数据已接入' : '等待首次检测数据' }}</small></div>
+            </div>
+            <div class="history-row muted">
+              <span class="level-dot"></span>
+              <div><b>完整记录</b><small>查看每一次水质检测报告与分析结果</small></div>
+            </div>
+          </div>
+          <NuxtLink to="/history" class="history-link">查看历史记录 →</NuxtLink>
+        </article>
+      </section>
+    </main>
+  </div>
 </template>
 
 <style scoped>
-.wrap { max-width: 640px; margin: 0 auto; padding: 24px; font-family: system-ui; }
-.bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 16px 0; }
-.sub { font-size: 13px; color: #555; }
-.err { color: #c0392b; }
-.wet { padding: 8px 12px; border-radius: 6px; background: #e8f5e9; font-size: 14px; }
+/* 水环境科技风：左侧悬浮导航 + 右侧分层浮空卡片 */
+.dashboard-shell {
+  position: relative;
+  display: grid;
+  grid-template-columns: 286px minmax(0, 1fr);
+  gap: 28px;
+  max-width: 1480px;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 28px;
+  color: #103c58;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
 
-.primary { padding: 10px 20px; margin: 16px 0; }
+.dashboard-shell::before,
+.dashboard-shell::after {
+  content: '';
+  position: fixed;
+  pointer-events: none;
+  z-index: -1;
+}
+.dashboard-shell::before {
+  inset: 0;
+  background:
+    radial-gradient(circle at 17% 18%, rgba(49, 191, 224, .32), transparent 28%),
+    radial-gradient(circle at 78% 12%, rgba(105, 229, 241, .34), transparent 26%),
+    radial-gradient(circle at 84% 78%, rgba(57, 145, 218, .26), transparent 30%),
+    linear-gradient(135deg, rgba(184, 235, 254, .9), rgba(118, 208, 242, .7) 44%, rgba(194, 241, 255, .84));
+}
+.dashboard-shell::after {
+  inset: 0;
+  opacity: .78;
+  background-image:
+    radial-gradient(circle, rgba(255,255,255,.72) 0 2px, transparent 2.4px),
+    repeating-radial-gradient(ellipse at 22% 34%, rgba(255,255,255,.22) 0 2px, rgba(31,151,208,.18) 3px, transparent 7px, transparent 34px),
+    linear-gradient(118deg, transparent 0 24%, rgba(255,255,255,.18) 25%, transparent 38% 100%);
+  background-size: 130px 130px, 620px 360px, 100% 100%;
+}
 
-.eval { padding: 16px; border-radius: 8px; margin: 16px 0; }
-.grade-text { font-size: 36px; margin: 8px 0; }
-.grade-desc { font-size: 14px; color: #555; margin: 4px 0; }
-.confidence { font-size: 13px; color: #888; }
+/* ── 侧栏 ── */
+.sidebar-panel {
+  position: sticky;
+  top: 28px;
+  align-self: start;
+  min-height: calc(100vh - 56px);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px 20px;
+  border: 1px solid rgba(255,255,255,.68);
+  border-radius: 34px;
+  background: linear-gradient(150deg, rgba(255,255,255,.82), rgba(224,248,255,.7) 54%, rgba(198,236,250,.74));
+  box-shadow: 0 28px 70px rgba(20, 105, 154, .28), inset 0 1px 0 rgba(255,255,255,.9);
+  backdrop-filter: blur(18px);
+}
+.brand-block { display: flex; align-items: center; gap: 12px; padding: 8px 8px 16px; }
+.brand-logo {
+  width: 48px; height: 48px;
+  display: grid; place-items: center;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #dfffff, #77d9ff);
+  box-shadow: 0 14px 24px rgba(21, 139, 212, .3);
+}
+.brand-block strong { display: block; font-size: 20px; line-height: 1; color: #126293; letter-spacing: .2px; }
+.brand-block em { display: block; margin-top: 4px; font-style: normal; font-size: 13px; font-weight: 700; color: #5a9fbf; }
 
-.report-section { margin: 24px 0; padding: 16px; border: 1px solid #e0e0e0; border-radius: 8px; }
-.note-input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; resize: vertical; }
+.quick-menu { display: grid; gap: 13px; }
+.quick-item {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 54px; padding: 10px 14px;
+  border-radius: 22px;
+  color: #2b657f; text-decoration: none;
+  background: linear-gradient(145deg, rgba(255,255,255,.88), rgba(220,247,255,.68));
+  box-shadow: 0 14px 26px rgba(28, 127, 180, .14), inset 0 1px 0 rgba(255,255,255,.82);
+  cursor: pointer;
+  transition: transform .16s ease, box-shadow .16s ease, color .16s ease;
+}
+.quick-item span {
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border-radius: 14px;
+  background: rgba(255,255,255,.78);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.85);
+}
+.quick-item b { font-size: 14px; }
+.quick-item:hover { transform: translateY(-3px); box-shadow: 0 18px 34px rgba(28,127,180,.2); }
+.quick-item.active {
+  color: #fff;
+  background: linear-gradient(135deg, #27bee2, #167ed3 58%, #23c4c1);
+  box-shadow: 0 18px 34px rgba(21, 139, 212, .34);
+}
 
-.hint { font-size: 13px; color: #666; margin: 4px 0 8px; }
-.ghost { padding: 8px 16px; margin: 8px 8px 0 0; background: none; border: 1px solid #bbb; border-radius: 4px; cursor: pointer; }
-.cap-stage { font-size: 14px; margin: 4px 0 8px; }
-.cap-meta { font-size: 13px; color: #555; margin: 8px 0; }
-.cap-bar { height: 10px; border-radius: 5px; background: #eee; overflow: hidden; }
-.cap-bar-fill { height: 100%; background: #2e86de; transition: width .3s ease; }
-.field-label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
-.water-types { display: flex; flex-wrap: wrap; gap: 8px 16px; }
-.wt-opt { font-size: 14px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
-.confirm { display: flex; align-items: flex-start; gap: 6px; font-size: 14px; margin: 12px 0; }
+.side-control { margin-top: auto; display: grid; gap: 12px; }
+.demo-switch { display: flex; align-items: center; gap: 8px; color: #35677e; font-size: 14px; font-weight: 700; cursor: pointer; }
+.demo-switch.sub { font-size: 13px; font-weight: 600; color: #5a8095; }
+.btn-ble {
+  border: none; border-radius: 18px;
+  padding: 12px 16px; color: #fff; font-weight: 800; cursor: pointer;
+  background: linear-gradient(135deg, #20c5c2, #168bd4);
+  box-shadow: 0 14px 28px rgba(20, 139, 212, .32);
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+.btn-ble:hover { transform: translateY(-2px); box-shadow: 0 18px 32px rgba(20,139,212,.4); }
+.btn-ble.connected { background: linear-gradient(135deg, #168bd4, #0c6aa6); }
 
-.result { padding: 16px; border-radius: 8px; margin: 16px 0; }
+/* ── 主区 ── */
+.main-area { min-width: 0; display: flex; flex-direction: column; gap: 24px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 2px 4px; }
+.eyebrow { margin: 0 0 3px; color: #2f83a5; font-size: 12px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
+.topbar h1 { margin: 0; color: #105179; font-size: clamp(32px, 3vw, 48px); line-height: 1; letter-spacing: -.04em; }
+.top-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.err { color: #e2603b; font-size: 13px; font-weight: 700; }
+.status-pill,
+.ghost-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 40px; padding: 0 16px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.78);
+  color: #315f75; font-size: 13px; font-weight: 800; text-decoration: none;
+  box-shadow: 0 12px 25px rgba(24,118,170,.14);
+}
+.status-pill i { width: 9px; height: 9px; border-radius: 50%; background: #aac6d4; }
+.status-pill.live i { background: #20c5c2; box-shadow: 0 0 0 6px rgba(32,197,194,.18); }
 
+.hero-card,
+.float-card,
+.white-card {
+  position: relative; overflow: hidden;
+  border: 1px solid rgba(255,255,255,.65);
+  box-shadow: 0 26px 62px rgba(20, 102, 151, .25), inset 0 1px 0 rgba(255,255,255,.55);
+  backdrop-filter: blur(12px);
+}
+.hero-card {
+  display: flex; justify-content: space-between; align-items: center; gap: 24px;
+  min-height: 210px; padding: 34px 42px;
+  border-radius: 38px; color: #fff;
+  background:
+    radial-gradient(circle at 84% 18%, rgba(255,255,255,.35), transparent 26%),
+    radial-gradient(circle at 18% 82%, rgba(115,236,255,.24), transparent 30%),
+    linear-gradient(125deg, #168bd4 0%, #27bde2 46%, #23c4c1 100%);
+}
+.hero-card::before {
+  content: '';
+  position: absolute; inset: auto -10% -30% 22%; height: 120px;
+  background: repeating-radial-gradient(ellipse at center, rgba(255,255,255,.34) 0 2px, transparent 4px 20px);
+  opacity: .42;
+}
+.hero-copy { position: relative; z-index: 1; }
+.hero-tag { display: inline-flex; margin-bottom: 12px; padding: 7px 14px; border-radius: 999px; background: rgba(255,255,255,.18); font-size: 12px; font-weight: 900; letter-spacing: .08em; }
+.hero-copy h2 { margin: 0 0 8px; font-size: clamp(28px, 3vw, 44px); line-height: 1.05; letter-spacing: -.04em; }
+.hero-copy > p { margin: 0 0 20px; font-size: 16px; opacity: .93; }
+.wait-box { display: inline-flex; align-items: center; gap: 10px; padding: 12px 18px; border-radius: 18px; border: 1px dashed rgba(255,255,255,.62); background: rgba(255,255,255,.17); font-size: 14px; font-weight: 800; }
+.dot-pulse { width: 10px; height: 10px; border-radius: 50%; background: #fff39a; box-shadow: 0 0 0 0 rgba(255,243,154,.75); animation: pulse 1.5s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,243,154,.75); } 70% { box-shadow: 0 0 0 12px rgba(255,243,154,0); } 100% { box-shadow: 0 0 0 0 rgba(255,243,154,0); } }
+.wet-tip { margin: 14px 0 0; font-weight: 800; }
+.hero-visual { position: relative; z-index: 1; flex: 0 0 auto; filter: drop-shadow(0 24px 30px rgba(0,76,124,.25)); }
+
+.card-grid { display: grid; gap: 24px; }
+.primary-grid,
+.secondary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.float-card,
+.white-card { border-radius: 34px; padding: 26px; }
+.data-card { background: linear-gradient(145deg, rgba(229,248,255,.92), rgba(174,225,250,.86) 48%, rgba(129,205,242,.82)); }
+.feedback-card { background: linear-gradient(145deg, rgba(226,253,249,.94), rgba(184,241,236,.88) 48%, rgba(154,230,235,.82)); }
+.white-card { background: linear-gradient(145deg, rgba(255,255,255,.92), rgba(239,252,255,.84)); }
+.card-title { display: flex; align-items: center; gap: 13px; margin-bottom: 18px; }
+.card-title.compact { margin-bottom: 12px; }
+.card-title h3 { margin: 0; color: #105179; font-size: 19px; font-weight: 900; letter-spacing: -.02em; }
+.card-title small { margin-top: 3px; color: #4e839a; }
+.icon-bubble { width: 46px; height: 46px; flex: 0 0 46px; display: grid; place-items: center; border-radius: 18px; background: rgba(255,255,255,.72); box-shadow: 0 12px 24px rgba(28,127,180,.16); font-size: 21px; }
+.icon-bubble.pale { background: linear-gradient(135deg, #e9fbff, #ffffff); }
+
+/* ── 实时评级卡 ── */
+.eval { padding: 14px 16px; border-radius: 18px; margin-top: 16px; }
+.grade-text { font-size: 30px; margin: 2px 0 4px; letter-spacing: -.02em; }
+.grade-desc { font-size: 14px; color: #345; margin: 4px 0; }
+.confidence { font-size: 13px; color: #557; margin: 4px 0; }
+small { display: block; color: #5f8798; margin-top: 4px; }
+
+/* ── 采集流程 ── */
+.hint { font-size: 13px; color: #35677e; margin: 4px 0 12px; line-height: 1.6; }
+.cap-stage { font-size: 14px; font-weight: 700; color: #17435e; margin: 4px 0 10px; }
+.cap-meta { font-size: 13px; color: #4e839a; margin: 10px 0; }
+.cap-bar { height: 12px; border-radius: 6px; background: rgba(255,255,255,.6); overflow: hidden; box-shadow: inset 0 1px 3px rgba(20,105,154,.16); }
+.cap-bar-fill { height: 100%; background: linear-gradient(90deg, #23c4c1, #168bd4); transition: width .3s ease; }
+
+.field-label { display: block; font-size: 13px; font-weight: 800; color: #2b657f; margin: 16px 0 8px; }
+.water-types { display: flex; flex-wrap: wrap; gap: 10px; }
+.wt-opt {
+  font-size: 14px; display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px; border-radius: 999px; cursor: pointer;
+  background: rgba(255,255,255,.72); color: #2b657f; font-weight: 700;
+  border: 1.5px solid transparent;
+  box-shadow: 0 8px 18px rgba(28,127,180,.1);
+  transition: transform .14s ease, border-color .14s ease, background .14s ease;
+}
+.wt-opt:hover { transform: translateY(-2px); }
+.wt-opt.checked { border-color: #1aa4d8; background: rgba(207,244,255,.92); color: #105179; }
+.wt-opt input { accent-color: #168bd4; }
+
+.note-input {
+  width: 100%; box-sizing: border-box; min-height: 76px;
+  padding: 13px 15px;
+  border: 1.5px solid rgba(38, 161, 203, .24);
+  border-radius: 18px; outline: none; resize: vertical;
+  background: rgba(255,255,255,.78); color: #123d58; font: inherit;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.7);
+}
+.note-input:focus { border-color: #1aa4d8; box-shadow: 0 0 0 5px rgba(26,164,216,.12); }
+
+.confirm {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 14px; margin: 16px 0; padding: 12px 14px;
+  border-radius: 16px; cursor: pointer;
+  background: rgba(255,255,255,.6); border: 1.5px solid transparent;
+  transition: border-color .14s ease, background .14s ease;
+}
+.confirm.checked { border-color: #23c4c1; background: rgba(226,253,249,.85); }
+.confirm input { margin-top: 2px; accent-color: #168bd4; }
+
+.primary {
+  width: 100%; margin-top: 14px; border: none; border-radius: 20px;
+  padding: 14px 20px; color: #fff; font-weight: 900; font-size: 15px; cursor: pointer;
+  background: linear-gradient(135deg, #23c4c1, #168bd4);
+  box-shadow: 0 16px 30px rgba(20,139,212,.3);
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+.primary:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 20px 36px rgba(20,139,212,.38); }
+.primary:disabled { background: #a8d0df; cursor: not-allowed; box-shadow: none; }
+.ghost {
+  width: 100%; margin-top: 10px; padding: 11px 18px;
+  border: 1.5px solid rgba(46,134,222,.35); border-radius: 20px;
+  background: rgba(255,255,255,.5); color: #2b657f; font-weight: 800; cursor: pointer;
+  transition: background .14s ease;
+}
+.ghost:hover:not(:disabled) { background: rgba(255,255,255,.85); }
+.ghost:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ── 提交结果 ── */
+.result { margin-top: 16px; padding: 15px 16px; border-radius: 18px; background: rgba(255,255,255,.7); }
+.result p { margin: 5px 0; }
 .llm { white-space: pre-wrap; font-size: 14px; margin-top: 8px; }
-small { display: block; color: #888; margin-top: 4px; }
+details summary { cursor: pointer; color: #105179; margin-top: 8px; font-weight: 800; }
+
+/* ── 波形 / 历史 ── */
+.wave-chart { width: 100%; height: 150px; display: block; margin-top: 6px; border-radius: 24px; background: linear-gradient(180deg, rgba(225,249,255,.72), rgba(255,255,255,.32)); }
+.history-list { display: grid; gap: 12px; margin: 14px 0 18px; }
+.history-row { display: flex; align-items: center; gap: 12px; padding: 13px 14px; border-radius: 20px; background: rgba(233,250,255,.72); }
+.history-row b { display: block; color: #164f70; }
+.history-row.muted { opacity: .82; }
+.level-dot { width: 12px; height: 12px; border-radius: 50%; background: #8bbdd1; box-shadow: 0 0 0 6px rgba(139,189,209,.14); }
+.level-dot.safe { background: #23c4c1; box-shadow: 0 0 0 6px rgba(35,196,193,.16); }
+.history-link { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 0 19px; border-radius: 999px; color: #fff; font-weight: 900; text-decoration: none; background: linear-gradient(135deg, #27bee2, #168bd4); box-shadow: 0 14px 28px rgba(20,139,212,.28); transition: transform .16s ease; }
+.history-link:hover { transform: translateY(-2px); }
+
+@media (max-width: 1040px) {
+  .dashboard-shell { grid-template-columns: 1fr; padding: 20px; }
+  .sidebar-panel { position: relative; top: auto; min-height: auto; }
+  .quick-menu { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .primary-grid,
+  .secondary-grid { grid-template-columns: 1fr; }
+  .hero-card,
+  .topbar { flex-direction: column; align-items: flex-start; }
+  .hero-visual { align-self: center; }
+}
 </style>

@@ -99,7 +99,21 @@ curl "http://localhost:8090/api/v1/insights/records?limit=20&region=武汉市青
 
 # 单条详情(含完整输入快照 + Markdown 正文)
 curl http://localhost:8090/api/v1/insights/records/1
+
+# 清空所有生成记录(清空 SQLite generations 表)
+curl -X DELETE http://localhost:8090/api/v1/insights/records
 ```
+
+清空接口响应示例：
+
+```json
+{
+  "status": "ok",
+  "deleted": 12
+}
+```
+
+> 注意：`DELETE /api/v1/insights/records` 会删除全部历史生成记录，同时清空基于历史记录的缓存；操作前如需保留数据，请先备份 `llm_reports.db`。
 
 `GET /health` 健康检查。
 
@@ -116,6 +130,7 @@ curl http://localhost:8090/api/v1/insights/records/1
 - 路径可用环境变量 `LLM_DB_PATH` 覆盖。
 - 已加入 `.gitignore`（连同 WAL 的 `-wal` / `-shm`），不进版本库。
 - 备份：直接复制该 `.db` 文件即可整库迁移/归档。
+- 清空：调用 `DELETE /api/v1/insights/records` 删除 `generations` 表内所有生成记录。
 
 ## 安全
 

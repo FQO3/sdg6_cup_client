@@ -6,10 +6,11 @@ app.py —— FastAPI 入口(实战模式)
   测水 → 聚合 → AI 生成本区域改善提案 → 反哺本地政府。
 
 路由:
-  POST /api/v1/insights/generate  区域 / 点位提案(输入快照由调用方传入)
-  GET  /api/v1/insights/records   历史生成记录(输入+响应, 便于操作/备份)
-  GET  /api/v1/insights/records/{id}
-  GET  /health                    健康检查
+  POST   /api/v1/insights/generate  区域 / 点位提案(输入快照由调用方传入)
+  GET    /api/v1/insights/records   历史生成记录(输入+响应, 便于操作/备份)
+  GET    /api/v1/insights/records/{id}
+  DELETE /api/v1/insights/records   清空所有生成记录(清空数据库)
+  GET    /health                    健康检查
 
 持久化: 每次成功生成落库 SQLite(store.py), 同库充当缓存。
 安全: 密钥仅存后端, 客户端经此服务代理, 不直连 LLM。
@@ -32,6 +33,7 @@ from store import (
     save_generation,
     list_records,
     get_record,
+    clear_records,
 )
 
 app = FastAPI(title="清源计划 · 水质提案生成服务", version="2.0.0")
@@ -118,6 +120,13 @@ async def records(
     region: Optional[str] = None,
 ) -> list[RecordItem]:
     return list_records(limit=limit, offset=offset, region=region)
+
+
+@app.delete("/api/v1/insights/records")
+async def clear_all_records() -> dict:
+    """清空数据库中所有生成记录, 返回删除条数。"""
+    deleted = clear_records()
+    return {"status": "ok", "deleted": deleted}
 
 
 @app.get("/api/v1/insights/records/{record_id}", response_model=RecordItem)

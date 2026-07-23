@@ -30,6 +30,11 @@ pnpm-debug.log*
 Thumbs.db
 *.swp
 
+# LLM service SQLite database (contains generated reports; back up separately)
+Services/LLM/*.db
+Services/LLM/*.db-wal
+Services/LLM/*.db-shm
+
 # Firmware build artifacts
 firmware/**/build/
 *.bin

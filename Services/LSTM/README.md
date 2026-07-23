@@ -214,3 +214,6 @@ LSTM 使用四个核心特征：
 - `turbidity`：浊度 NTU
 
 同时会保留 `tds / wet / location / water_type / user_note`，供查询、聚合和 LLM 分析使用。
+
+## 主页面
+[跳转链接](/README.md)

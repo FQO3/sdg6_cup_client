@@ -1,6 +1,6 @@
-import { db } from '../../src/db.js';
-import { safeJsonParse } from '../../src/utils/common.js';
-import { gradeColor } from '../../src/utils/constants.js';
+import { db } from '~~/src/db.js';
+import { safeJsonParse } from '~~/src/utils/common.js';
+import { gradeColor } from '~~/src/utils/constants.js';
 
 export function rowToReport(row) {
   if (!row) return null;

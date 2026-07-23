@@ -1,4 +1,4 @@
-import { ApiError } from '../../../../src/utils/response.js';
+import { ApiError } from '~~/src/utils/response.js';
 import { defineApiHandler, sendOk } from '../../../utils/api.js';
 import { getReportById } from '../../../utils/mappers.js';
 

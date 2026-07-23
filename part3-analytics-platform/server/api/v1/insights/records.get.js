@@ -1,5 +1,5 @@
-import { db } from '../../../../src/db.js';
-import { toInt } from '../../../../src/utils/common.js';
+import { db } from '~~/src/db.js';
+import { toInt } from '~~/src/utils/common.js';
 import { defineApiHandler, getApiQuery, sendOk } from '../../../utils/api.js';
 import { analysisRow } from '../../../utils/snapshots.js';
 

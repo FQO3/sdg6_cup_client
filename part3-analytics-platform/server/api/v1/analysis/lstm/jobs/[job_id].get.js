@@ -1,5 +1,5 @@
-import { db } from '../../../../../../src/db.js';
-import { ApiError } from '../../../../../../src/utils/response.js';
+import { db } from '~~/src/db.js';
+import { ApiError } from '~~/src/utils/response.js';
 import { defineApiHandler, sendOk } from '../../../../../utils/api.js';
 import { jobRow } from '../../../../../utils/snapshots.js';
 

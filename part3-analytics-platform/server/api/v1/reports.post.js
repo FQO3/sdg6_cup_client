@@ -1,8 +1,8 @@
-import { db } from '../../../src/db.js';
-import { config } from '../../../src/config.js';
-import { ApiError, requireFields, assertEnum } from '../../../src/utils/response.js';
-import { nowIso, makeId } from '../../../src/utils/common.js';
-import { WATER_TYPES, GB_GRADES } from '../../../src/utils/constants.js';
+import { db } from '~~/src/db.js';
+import { config } from '~~/src/config.js';
+import { ApiError, requireFields, assertEnum } from '~~/src/utils/response.js';
+import { nowIso, makeId } from '~~/src/utils/common.js';
+import { WATER_TYPES, GB_GRADES } from '~~/src/utils/constants.js';
 import { defineApiHandler, sendOk } from '../../utils/api.js';
 import { getReportById } from '../../utils/mappers.js';
 

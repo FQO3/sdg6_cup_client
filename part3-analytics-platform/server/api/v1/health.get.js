@@ -1,5 +1,5 @@
-import { getDbPath } from '../../../src/db.js';
-import { config } from '../../../src/config.js';
+import { getDbPath } from '~~/src/db.js';
+import { config } from '~~/src/config.js';
 import { defineApiHandler, sendOk } from '../../utils/api.js';
 
 export default defineApiHandler((event) => sendOk(event, {

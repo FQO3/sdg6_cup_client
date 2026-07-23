@@ -1,6 +1,6 @@
-import { db } from '../../../../src/db.js';
-import { toBool } from '../../../../src/utils/common.js';
-import { gradeColor } from '../../../../src/utils/constants.js';
+import { db } from '~~/src/db.js';
+import { toBool } from '~~/src/utils/common.js';
+import { gradeColor } from '~~/src/utils/constants.js';
 import { defineApiHandler, getApiQuery, sendOk } from '../../../utils/api.js';
 
 export default defineApiHandler((event) => {

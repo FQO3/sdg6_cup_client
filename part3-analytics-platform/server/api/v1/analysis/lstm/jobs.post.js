@@ -1,6 +1,6 @@
-import { db } from '../../../../../src/db.js';
-import { config } from '../../../../../src/config.js';
-import { makeId, nowIso, toBool, toInt } from '../../../../../src/utils/common.js';
+import { db } from '~~/src/db.js';
+import { config } from '~~/src/config.js';
+import { makeId, nowIso, toBool, toInt } from '~~/src/utils/common.js';
 import { defineApiHandler, sendOk } from '../../../../utils/api.js';
 import { jobRow, runLstmJob } from '../../../../utils/snapshots.js';
 

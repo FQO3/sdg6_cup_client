@@ -1,8 +1,8 @@
-import { db } from '../../../../src/db.js';
-import { config } from '../../../../src/config.js';
-import { ApiError } from '../../../../src/utils/response.js';
-import { toBool, nowIso } from '../../../../src/utils/common.js';
-import { generateInsight } from '../../../../src/services/llmClient.js';
+import { db } from '~~/src/db.js';
+import { config } from '~~/src/config.js';
+import { ApiError } from '~~/src/utils/response.js';
+import { toBool, nowIso } from '~~/src/utils/common.js';
+import { generateInsight } from '~~/src/services/llmClient.js';
 import { defineApiHandler, sendOk } from '../../../utils/api.js';
 import { analysisRow, cacheFresh, buildRegionSnapshot, buildPointSnapshot } from '../../../utils/snapshots.js';
 

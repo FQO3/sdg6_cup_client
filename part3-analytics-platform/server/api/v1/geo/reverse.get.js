@@ -1,6 +1,6 @@
-import { reverseGeocode } from '../../../../src/services/amapClient.js';
+import { reverseGeocode } from '~~/src/services/amapClient.js';
 import { defineApiHandler, getApiQuery, sendOk } from '../../../utils/api.js';
-import { ApiError } from '../../../../src/utils/response.js';
+import { ApiError } from '~~/src/utils/response.js';
 
 export default defineApiHandler(async (event) => {
   const query = getApiQuery(event);

@@ -1,5 +1,5 @@
-import { ok, ApiError } from '../../src/utils/response.js';
-import { initDb } from '../../src/db.js';
+import { ok, ApiError } from '~~/src/utils/response.js';
+import { initDb } from '~~/src/db.js';
 
 let dbReady = false;
 

@@ -1,0 +1,594 @@
+<script setup lang="ts">
+import { ref, computed, watch } from 'vue'
+import { useBle } from '~/composables/useBle'
+import { useDemo, demoLevelFallback } from '~/composables/useWqi'
+import { useEvaluate } from '~/composables/useEvaluate'
+import { useReports } from '~/composables/useReports'
+import type { Metrics, ReportPayload } from '~/types/reading'
+
+const config = useRuntimeConfig()
+const ble = useBle()
+const demo = useDemo()
+const { submit } = useReports()
+
+const demoOn = ref(config.public.demoMode)
+
+// ───── 链路 A：实时判级 ─────
+
+/** Demo 模式用模拟数据，BLE 模式用真实聚合数据触发 /evaluate */
+const batchedSource = computed<Metrics | null>(() =>
+  demoOn.value ? demo.metrics.value : ble.batchedMetrics.value,
+)
+
+/** 当前设备 ID：Demo 用固定名，BLE 用真实设备名 */
+const deviceId = computed(() =>
+  demoOn.value ? 'demo-device' : (ble.deviceName.value || 'unknown'),
+)
+
+/** 链路 A 判级 composable：监听 batchedSource 自动调 /evaluate */
+const evaluate = useEvaluate(batchedSource, deviceId)
+
+/** Demo 模式：本地简化判级，不调后端 */
+const demoEval = computed(() =>
+  demo.metrics.value ? demoLevelFallback(demo.metrics.value) : null,
+)
+
+/** 当前显示的水质等级/WQI：Demo 用本地，BLE 用后端 /evaluate */
+const displayLevel = computed(() =>
+  demoOn.value ? demoEval.value?.level ?? null : evaluate.result.value?.level ?? null,
+)
+const displayWqi = computed(() =>
+  demoOn.value ? demoEval.value?.wqi ?? null : evaluate.result.value?.wqi ?? null,
+)
+
+// ───── 链路 B：提交报告 ─────
+
+const userNote = ref('')
+const submitting = ref(false)
+const reportResult = ref<Awaited<ReturnType<typeof submit>> | null>(null)
+
+/** MetricCard 展示用：Demo 用 demo.metrics，BLE 用最近单帧 rawMetrics */
+const displayMetrics = computed<Metrics | null>(() =>
+  demoOn.value ? demo.metrics.value : ble.rawMetrics.value,
+)
+
+// Demo 开关联动
+watch(demoOn, (on) => (on ? demo.start() : demo.stop()))
+
+async function onSubmit() {
+  const m = displayMetrics.value
+  if (!m) return
+  submitting.value = true
+  reportResult.value = null
+  try {
+    const pos = await getPosition()
+    const region = await reverseGeocode(pos.lat, pos.lng)
+    const payload: ReportPayload = {
+      device_id: deviceId.value,
+      location: { lat: pos.lat, lng: pos.lng, region },
+      metrics: m,
+      user_note: userNote.value || undefined,
+      measured_at: new Date().toISOString(),
+    }
+    reportResult.value = await submit(payload)
+  } catch (e: any) {
+    // 不存本地缓存，提示重试
+    alert('上报失败：' + (e?.message ?? '网络异常，请重试'))
+  } finally {
+    submitting.value = false
+  }
+}
+
+async function getPosition(): Promise<{ lat: number; lng: number }> {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve({ lat: 0, lng: 0 })
+    navigator.geolocation.getCurrentPosition(
+      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      () => resolve({ lat: 0, lng: 0 }),
+      { timeout: 5000 },
+    )
+  })
+}
+
+/** 反地理编码（用免费 Nominatim API） */
+async function reverseGeocode(lat: number, lng: number): Promise<string> {
+  try {
+    const res = await $fetch<{ display_name?: string }>(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10`,
+    )
+    return res?.display_name ?? '未知区域'
+  } catch {
+    return '未知区域'
+  }
+}
+</script>
+
+<template>
+  <div class="dashboard-shell">
+    <aside class="sidebar-panel">
+      <div class="brand-block">
+        <span class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 36 36" width="34" height="34">
+            <defs>
+              <linearGradient id="logoWater" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#7ee4ff" />
+                <stop offset="1" stop-color="#168bd2" />
+              </linearGradient>
+            </defs>
+            <path d="M18 3C18 3 7 16 7 23a11 11 0 0022 0C29 16 18 3 18 3z" fill="url(#logoWater)" />
+            <path d="M13 23c3 2.2 7 2.2 10 0" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".9" />
+            <circle cx="22" cy="13" r="2.1" fill="#eaffff" opacity=".95" />
+          </svg>
+        </span>
+        <div>
+          <strong>AquaCheck</strong>
+          <em>·水质检测</em>
+        </div>
+      </div>
+
+      <div class="side-search">
+        <svg viewBox="0 0 22 22" width="17" height="17" aria-hidden="true">
+          <circle cx="9.5" cy="9.5" r="6.5" fill="none" stroke="#5ea8c9" stroke-width="2" />
+          <path d="M14.5 14.5l4 4" stroke="#5ea8c9" stroke-width="2" stroke-linecap="round" />
+        </svg>
+        <input placeholder="搜索功能 / 记录…" type="text" />
+      </div>
+
+      <nav class="quick-menu" aria-label="快捷功能菜单">
+        <a class="quick-item active">
+          <span>📊</span>
+          <b>Dashboard</b>
+        </a>
+        <a class="quick-item">
+          <span>💧</span>
+          <b>实时数据</b>
+        </a>
+        <a class="quick-item">
+          <span>📝</span>
+          <b>异常反馈</b>
+        </a>
+        <NuxtLink to="/history" class="quick-item">
+          <span>🕘</span>
+          <b>历史记录</b>
+        </NuxtLink>
+      </nav>
+
+      <div class="side-control">
+        <label class="demo-switch">
+          <input type="checkbox" v-model="demoOn" />
+          <span>Demo 模式</span>
+        </label>
+        <template v-if="!demoOn">
+          <button v-if="!ble.connected.value" class="btn-ble" @click="ble.connect">
+            {{ ble.supported.value ? '连接水杯 BLE' : 'BLE 不可用' }}
+          </button>
+          <button v-else class="btn-ble connected" @click="ble.disconnect">
+            断开 · {{ ble.deviceName.value }}
+          </button>
+        </template>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Water Environment Intelligence</p>
+          <h1>Dashboard</h1>
+        </div>
+        <div class="top-actions">
+          <span v-if="ble.error.value" class="err">{{ ble.error.value }}</span>
+          <span class="status-pill" :class="{ live: displayMetrics }">
+            <i></i>{{ displayMetrics ? '数据接入中' : '未接入' }}
+          </span>
+          <NuxtLink to="/history" class="ghost-btn">历史记录</NuxtLink>
+        </div>
+      </header>
+
+      <section class="hero-card">
+        <div class="hero-copy">
+          <span class="hero-tag">Smart Cup · Cloud WQI</span>
+          <h2>饮水安全，一杯即测</h2>
+          <p>智能水杯，实时采集云端评估水质等级</p>
+          <div class="wait-box">
+            <span v-if="!displayMetrics" class="dot-pulse"></span>
+            <span>{{ displayMetrics ? '数据已接入，检测中…' : '等待数据 · 连接水杯或开启 Demo' }}</span>
+          </div>
+          <p v-if="!demoOn && ble.connected.value" class="wet-tip">
+            {{ displayMetrics?.wet ? '✅ 水杯已浸没' : '⚠️ 水杯未浸入水中，请浸没后检测' }}
+          </p>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <svg viewBox="0 0 170 150" width="185" height="165">
+            <defs>
+              <linearGradient id="cupGlass" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="rgba(255,255,255,.92)" />
+                <stop offset="1" stop-color="rgba(210,244,255,.42)" />
+              </linearGradient>
+              <linearGradient id="cupWater" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#80e8ff" />
+                <stop offset="1" stop-color="#178bd4" />
+              </linearGradient>
+            </defs>
+            <circle cx="126" cy="34" r="18" fill="rgba(255,255,255,.28)" />
+            <circle cx="42" cy="38" r="10" fill="rgba(220,255,255,.45)" />
+            <path d="M52 34h66l-7 92a18 18 0 01-18 16H77a18 18 0 01-18-16z" fill="url(#cupGlass)" stroke="#fff" stroke-width="4" />
+            <path d="M61 86c14-10 28 8 43-1 5-3 9-5 12-5l-4 46a18 18 0 01-18 16H77a18 18 0 01-18-16z" fill="url(#cupWater)" opacity=".86" />
+            <path d="M65 75c12-7 24 6 37 0" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".9" />
+            <path d="M121 67c9 0 16 7 16 16s-7 16-16 16" fill="none" stroke="rgba(255,255,255,.75)" stroke-width="8" stroke-linecap="round" />
+            <path d="M85 12s-12 14-12 22a12 12 0 0024 0c0-8-12-22-12-22z" fill="#dfffff" opacity=".95" />
+          </svg>
+        </div>
+      </section>
+
+      <section class="card-grid primary-grid">
+        <article class="float-card data-card">
+          <div class="card-title">
+            <span class="icon-bubble">
+              <svg viewBox="0 0 30 30" width="22" height="22" aria-hidden="true">
+                <path d="M15 3s-9 10-9 17a9 9 0 0018 0C24 13 15 3 15 3z" fill="#168bd4" />
+                <path d="M10 20c3 2 7 2 10 0" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" />
+              </svg>
+            </span>
+            <div>
+              <h3>实时水质检测数据</h3>
+              <small>智能水杯传感器指标</small>
+            </div>
+          </div>
+          <MetricCard :metrics="displayMetrics" />
+          <div v-if="displayLevel" class="eval" :data-level="displayLevel">
+            <p>WQI <b>{{ displayWqi }}</b> / 100 · 等级 <b>{{ displayLevel }}</b></p>
+            <small v-if="!demoOn">（每 3 帧评测一次，仅供参考）</small>
+            <small v-else>（Demo 本地简化判级）</small>
+          </div>
+        </article>
+
+        <article class="float-card feedback-card">
+          <div class="card-title">
+            <span class="icon-bubble">📝</span>
+            <div>
+              <h3>水质异常反馈提交</h3>
+              <small>记录地点、水体特征与观察备注</small>
+            </div>
+          </div>
+          <textarea
+            v-model="userNote"
+            placeholder="备注（可选）：如取样地点、水体类型、异味/颜色等观察"
+            rows="4"
+            class="note-input"
+          />
+          <button class="primary" :disabled="!displayMetrics || submitting" @click="onSubmit">
+            {{ submitting ? '提交中…' : '提交报告 ⬆' }}
+          </button>
+
+          <div v-if="reportResult" class="result" :data-level="reportResult.level">
+            <b>报告已提交</b>
+            <p>ID：<b>{{ reportResult.report_id }}</b></p>
+            <p>WQI：<b>{{ reportResult.wqi }}</b> / 100 · 等级：<b>{{ reportResult.level }}</b></p>
+            <details v-if="reportResult.llm_report">
+              <summary>LLM 分析报告</summary>
+              <div class="llm" v-html="reportResult.llm_report" />
+            </details>
+          </div>
+        </article>
+      </section>
+
+      <section class="card-grid secondary-grid">
+        <article class="white-card chart-card">
+          <div class="card-title compact">
+            <span class="icon-bubble pale">📈</span>
+            <div>
+              <h3>水质数据可视化波形图表</h3>
+              <small>实时趋势监测</small>
+            </div>
+          </div>
+          <svg class="wave-chart" viewBox="0 0 360 140" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#36bce8" stop-opacity=".42" />
+                <stop offset="1" stop-color="#36bce8" stop-opacity="0" />
+              </linearGradient>
+              <linearGradient id="chartLine" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#168bd4" />
+                <stop offset="1" stop-color="#23c7c3" />
+              </linearGradient>
+            </defs>
+            <path d="M0 90 C32 48 58 120 92 76 S154 42 190 74 S248 112 286 60 S338 46 360 68 L360 140 L0 140 Z" fill="url(#chartFill)" />
+            <path d="M0 90 C32 48 58 120 92 76 S154 42 190 74 S248 112 286 60 S338 46 360 68" fill="none" stroke="url(#chartLine)" stroke-width="4" stroke-linecap="round" />
+            <path d="M0 108 C42 82 76 104 112 94 S180 80 216 96 S296 124 360 92" fill="none" stroke="#8bdff3" stroke-width="2" stroke-dasharray="8 10" opacity=".9" />
+          </svg>
+        </article>
+
+        <article class="white-card history-card">
+          <div class="card-title compact">
+            <span class="icon-bubble pale">🕘</span>
+            <div>
+              <h3>历史水质检测记录列表</h3>
+              <small>过往检测数据归档</small>
+            </div>
+          </div>
+          <div class="history-list">
+            <div class="history-row">
+              <span class="level-dot safe"></span>
+              <div><b>最近检测</b><small>{{ displayMetrics ? '当前设备数据已接入' : '等待首次检测数据' }}</small></div>
+            </div>
+            <div class="history-row muted">
+              <span class="level-dot"></span>
+              <div><b>完整记录</b><small>查看每一次水质检测报告与分析结果</small></div>
+            </div>
+          </div>
+          <NuxtLink to="/history" class="history-link">查看历史记录 →</NuxtLink>
+        </article>
+      </section>
+    </main>
+  </div>
+</template>
+
+<style scoped>
+/* 水环境科技风：左侧悬浮导航 + 右侧分层浮空卡片 */
+.dashboard-shell {
+  position: relative;
+  display: grid;
+  grid-template-columns: 286px minmax(0, 1fr);
+  gap: 28px;
+  max-width: 1480px;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 28px;
+  color: #103c58;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+.dashboard-shell::before,
+.dashboard-shell::after {
+  content: '';
+  position: fixed;
+  pointer-events: none;
+  z-index: -1;
+}
+.dashboard-shell::before {
+  inset: 0;
+  background:
+    radial-gradient(circle at 17% 18%, rgba(49, 191, 224, .32), transparent 28%),
+    radial-gradient(circle at 78% 12%, rgba(105, 229, 241, .34), transparent 26%),
+    radial-gradient(circle at 84% 78%, rgba(57, 145, 218, .26), transparent 30%),
+    linear-gradient(135deg, rgba(184, 235, 254, .9), rgba(118, 208, 242, .7) 44%, rgba(194, 241, 255, .84));
+}
+.dashboard-shell::after {
+  inset: 0;
+  opacity: .78;
+  background-image:
+    radial-gradient(circle, rgba(255,255,255,.72) 0 2px, transparent 2.4px),
+    repeating-radial-gradient(ellipse at 22% 34%, rgba(255,255,255,.22) 0 2px, rgba(31,151,208,.18) 3px, transparent 7px, transparent 34px),
+    linear-gradient(118deg, transparent 0 24%, rgba(255,255,255,.18) 25%, transparent 38% 100%);
+  background-size: 130px 130px, 620px 360px, 100% 100%;
+}
+
+.sidebar-panel {
+  position: sticky;
+  top: 28px;
+  align-self: start;
+  min-height: calc(100vh - 56px);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px 20px;
+  border: 1px solid rgba(255,255,255,.68);
+  border-radius: 34px;
+  background: linear-gradient(150deg, rgba(255,255,255,.82), rgba(224,248,255,.7) 54%, rgba(198,236,250,.74));
+  box-shadow: 0 28px 70px rgba(20, 105, 154, .28), inset 0 1px 0 rgba(255,255,255,.9);
+  backdrop-filter: blur(18px);
+}
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 16px;
+}
+.brand-logo {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #dfffff, #77d9ff);
+  box-shadow: 0 14px 24px rgba(21, 139, 212, .3);
+}
+.brand-block strong { display: block; font-size: 20px; line-height: 1; color: #126293; letter-spacing: .2px; }
+.brand-block em { display: block; margin-top: 4px; font-style: normal; font-size: 13px; font-weight: 700; color: #5a9fbf; }
+
+.side-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 15px;
+  border-radius: 20px;
+  background: rgba(255,255,255,.82);
+  box-shadow: 0 12px 26px rgba(34, 131, 185, .13);
+}
+.side-search input { width: 100%; border: none; outline: none; background: transparent; color: #17435e; font-size: 14px; }
+
+.quick-menu { display: grid; gap: 13px; }
+.quick-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 10px 14px;
+  border-radius: 22px;
+  color: #2b657f;
+  text-decoration: none;
+  background: linear-gradient(145deg, rgba(255,255,255,.88), rgba(220,247,255,.68));
+  box-shadow: 0 14px 26px rgba(28, 127, 180, .14), inset 0 1px 0 rgba(255,255,255,.82);
+  cursor: pointer;
+  transition: transform .16s ease, box-shadow .16s ease, color .16s ease;
+}
+.quick-item span {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: rgba(255,255,255,.78);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.85);
+}
+.quick-item b { font-size: 14px; }
+.quick-item:hover { transform: translateY(-3px); box-shadow: 0 18px 34px rgba(28,127,180,.2); }
+.quick-item.active {
+  color: #fff;
+  background: linear-gradient(135deg, #27bee2, #167ed3 58%, #23c4c1);
+  box-shadow: 0 18px 34px rgba(21, 139, 212, .34);
+}
+
+.side-control { margin-top: auto; display: grid; gap: 12px; }
+.demo-switch { display: flex; align-items: center; gap: 8px; color: #35677e; font-size: 14px; font-weight: 700; cursor: pointer; }
+.btn-ble {
+  border: none;
+  border-radius: 18px;
+  padding: 12px 16px;
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+  background: linear-gradient(135deg, #20c5c2, #168bd4);
+  box-shadow: 0 14px 28px rgba(20, 139, 212, .32);
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+.btn-ble:hover { transform: translateY(-2px); box-shadow: 0 18px 32px rgba(20,139,212,.4); }
+.btn-ble.connected { background: linear-gradient(135deg, #168bd4, #0c6aa6); }
+
+.main-area { min-width: 0; display: flex; flex-direction: column; gap: 24px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 2px 4px; }
+.eyebrow { margin: 0 0 3px; color: #2f83a5; font-size: 12px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
+.topbar h1 { margin: 0; color: #105179; font-size: clamp(32px, 3vw, 48px); line-height: 1; letter-spacing: -.04em; }
+.top-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.err { color: #e2603b; font-size: 13px; font-weight: 700; }
+.status-pill,
+.ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.78);
+  color: #315f75;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+  box-shadow: 0 12px 25px rgba(24,118,170,.14);
+}
+.status-pill i { width: 9px; height: 9px; border-radius: 50%; background: #aac6d4; }
+.status-pill.live i { background: #20c5c2; box-shadow: 0 0 0 6px rgba(32,197,194,.18); }
+
+.hero-card,
+.float-card,
+.white-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.65);
+  box-shadow: 0 26px 62px rgba(20, 102, 151, .25), inset 0 1px 0 rgba(255,255,255,.55);
+  backdrop-filter: blur(12px);
+}
+.hero-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  min-height: 210px;
+  padding: 34px 42px;
+  border-radius: 38px;
+  color: #fff;
+  background:
+    radial-gradient(circle at 84% 18%, rgba(255,255,255,.35), transparent 26%),
+    radial-gradient(circle at 18% 82%, rgba(115,236,255,.24), transparent 30%),
+    linear-gradient(125deg, #168bd4 0%, #27bde2 46%, #23c4c1 100%);
+}
+.hero-card::before {
+  content: '';
+  position: absolute;
+  inset: auto -10% -30% 22%;
+  height: 120px;
+  background: repeating-radial-gradient(ellipse at center, rgba(255,255,255,.34) 0 2px, transparent 4px 20px);
+  opacity: .42;
+}
+.hero-copy { position: relative; z-index: 1; }
+.hero-tag { display: inline-flex; margin-bottom: 12px; padding: 7px 14px; border-radius: 999px; background: rgba(255,255,255,.18); font-size: 12px; font-weight: 900; letter-spacing: .08em; }
+.hero-copy h2 { margin: 0 0 8px; font-size: clamp(28px, 3vw, 44px); line-height: 1.05; letter-spacing: -.04em; }
+.hero-copy > p { margin: 0 0 20px; font-size: 16px; opacity: .93; }
+.wait-box { display: inline-flex; align-items: center; gap: 10px; padding: 12px 18px; border-radius: 18px; border: 1px dashed rgba(255,255,255,.62); background: rgba(255,255,255,.17); font-size: 14px; font-weight: 800; }
+.dot-pulse { width: 10px; height: 10px; border-radius: 50%; background: #fff39a; box-shadow: 0 0 0 0 rgba(255,243,154,.75); animation: pulse 1.5s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,243,154,.75); } 70% { box-shadow: 0 0 0 12px rgba(255,243,154,0); } 100% { box-shadow: 0 0 0 0 rgba(255,243,154,0); } }
+.wet-tip { margin: 14px 0 0; font-weight: 800; }
+.hero-visual { position: relative; z-index: 1; flex: 0 0 auto; filter: drop-shadow(0 24px 30px rgba(0,76,124,.25)); }
+
+.card-grid { display: grid; gap: 24px; }
+.primary-grid,
+.secondary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.float-card,
+.white-card { border-radius: 34px; padding: 26px; }
+.data-card { background: linear-gradient(145deg, rgba(229,248,255,.92), rgba(174,225,250,.86) 48%, rgba(129,205,242,.82)); }
+.feedback-card { background: linear-gradient(145deg, rgba(226,253,249,.94), rgba(184,241,236,.88) 48%, rgba(154,230,235,.82)); }
+.white-card { background: linear-gradient(145deg, rgba(255,255,255,.92), rgba(239,252,255,.84)); }
+.card-title { display: flex; align-items: center; gap: 13px; margin-bottom: 18px; }
+.card-title.compact { margin-bottom: 12px; }
+.card-title h3 { margin: 0; color: #105179; font-size: 19px; font-weight: 900; letter-spacing: -.02em; }
+.card-title small { margin-top: 3px; color: #4e839a; }
+.icon-bubble { width: 46px; height: 46px; flex: 0 0 46px; display: grid; place-items: center; border-radius: 18px; background: rgba(255,255,255,.72); box-shadow: 0 12px 24px rgba(28,127,180,.16); font-size: 21px; }
+.icon-bubble.pale { background: linear-gradient(135deg, #e9fbff, #ffffff); }
+
+.eval { padding: 14px 16px; border-radius: 20px; background: rgba(255,255,255,.62); margin-top: 16px; }
+.eval p { margin: 0 0 3px; }
+.eval[data-level='safe'] { background: rgba(207,245,224,.88); }
+.eval[data-level='warning'] { background: rgba(255,242,202,.9); }
+.eval[data-level='danger'] { background: rgba(255,224,221,.9); }
+small { display: block; color: #5f8798; margin-top: 4px; }
+
+.note-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 116px;
+  padding: 15px 16px;
+  border: 1.5px solid rgba(38, 161, 203, .24);
+  border-radius: 22px;
+  outline: none;
+  resize: vertical;
+  background: rgba(255,255,255,.76);
+  color: #123d58;
+  font: inherit;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.7);
+}
+.note-input:focus { border-color: #1aa4d8; box-shadow: 0 0 0 5px rgba(26,164,216,.12); }
+.primary { width: 100%; margin-top: 14px; border: none; border-radius: 22px; padding: 14px 20px; color: #fff; font-weight: 900; font-size: 15px; cursor: pointer; background: linear-gradient(135deg, #23c4c1, #168bd4); box-shadow: 0 16px 30px rgba(20,139,212,.3); transition: transform .16s ease, box-shadow .16s ease; }
+.primary:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 20px 36px rgba(20,139,212,.38); }
+.primary:disabled { background: #a8d0df; cursor: not-allowed; box-shadow: none; }
+
+.result { margin-top: 16px; padding: 15px 16px; border-radius: 20px; background: rgba(255,255,255,.7); }
+.result p { margin: 5px 0; }
+.result[data-level='safe'] { background: rgba(207,245,224,.88); }
+.result[data-level='warning'] { background: rgba(255,242,202,.9); }
+.result[data-level='danger'] { background: rgba(255,224,221,.9); }
+.llm { white-space: pre-wrap; font-size: 14px; margin-top: 8px; }
+details summary { cursor: pointer; color: #105179; margin-top: 8px; font-weight: 800; }
+
+.wave-chart { width: 100%; height: 150px; display: block; margin-top: 6px; border-radius: 24px; background: linear-gradient(180deg, rgba(225,249,255,.72), rgba(255,255,255,.32)); }
+.history-list { display: grid; gap: 12px; margin: 14px 0 18px; }
+.history-row { display: flex; align-items: center; gap: 12px; padding: 13px 14px; border-radius: 20px; background: rgba(233,250,255,.72); }
+.history-row b { display: block; color: #164f70; }
+.history-row.muted { opacity: .82; }
+.level-dot { width: 12px; height: 12px; border-radius: 50%; background: #8bbdd1; box-shadow: 0 0 0 6px rgba(139,189,209,.14); }
+.level-dot.safe { background: #23c4c1; box-shadow: 0 0 0 6px rgba(35,196,193,.16); }
+.history-link { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 0 19px; border-radius: 999px; color: #fff; font-weight: 900; text-decoration: none; background: linear-gradient(135deg, #27bee2, #168bd4); box-shadow: 0 14px 28px rgba(20,139,212,.28); transition: transform .16s ease; }
+.history-link:hover { transform: translateY(-2px); }
+
+@media (max-width: 1040px) {
+  .dashboard-shell { grid-template-columns: 1fr; padding: 20px; }
+  .sidebar-panel { position: relative; top: auto; min-height: auto; }
+  .quick-menu { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .primary-grid,
+  .secondary-grid { grid-template-columns: 1fr; }
+  .hero-card,
+  .topbar { flex-direction: column; align-items: flex-start; }
+  .hero-visual { align-self: center; }
+}
+</style>

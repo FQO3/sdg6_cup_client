@@ -33,14 +33,36 @@ export default defineEventHandler(async (event) => {
     })
     const { grade, grade_index } = pipelineResult as any
 
-    // Step 2: Forward to backend with grade added
+    // Step 2: Forward to backend with legacy-compatible top-level fields.
+    // 后端 /api/v1/reports 当前契约要求 raw_samples / grade / grade_index 在 body 顶层；
+    // 客户端新采集契约则把 20 条原始样本与众数评级放在 capture 内。
+    // 这里做 BFF 适配：既保留完整 capture 供后端存档，也把后端必填字段提升到顶层。
+    const capture = body.capture ?? {}
+    const rawSamples = body.raw_samples ?? capture.raw_samples
+    if (!Array.isArray(rawSamples)) {
+      throw createError({
+        statusCode: 400,
+        statusMessage: 'Missing raw_samples: expected body.raw_samples or body.capture.raw_samples',
+      })
+    }
+
+    const forwardBody = {
+      ...body,
+      raw_samples: rawSamples,
+      // 按新版“20 条评级取最多值”逻辑，优先使用 capture 内的众数评级；
+      // pipeline 对代表读数的判级仅作为兼容旧 payload 的兜底。
+      grade: capture.grade ?? grade,
+      grade_index: capture.grade_index ?? grade_index,
+    }
+
+    // Step 3: Forward to backend
     const res = await $fetch(`${config.backendBaseUrl}/reports`, {
       method: 'POST',
       headers: {
         'X-API-Key': config.backendApiKey,
         'Content-Type': 'application/json',
       },
-      body: { ...body, grade, grade_index },
+      body: forwardBody,
     })
 
     return (res as any)?.data

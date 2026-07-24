@@ -1,144 +1,250 @@
 /*
- * SDG6 AquaCheck · 水杯端 BLE 固件 (BW16 / RTL8720DN)
+ * SDG6 AquaCheck · 水杯端 BLE 固件 (ESP32 / NodeMCU-32S)
  * ────────────────────────────────────────────────────────────
- * 板子：Realtek Ameba BW16 (RTL8720DN)。使用 Ameba Arduino BLE API，
- *       与 ESP32 版 (cup_ble.ino) 采用不同的 BLE 库，但对外 GATT 契约完全一致。
+ * 注意：这个文件虽然仍放在 cup_ble_bw16 文件夹里，但现在已改成 ESP32 版本。
+ * 你的 Arduino IDE 当前打开的就是 firmware/cup_ble_bw16/cup_ble_bw16.ino，
+ * 并且板子选择的是 ESP32 / NodeMCU-32S，所以本文件必须使用 ESP32 BLE API。
  *
- * API 来源：ambiot/ambd_arduino 官方 BLEUartService 示例 + BLE 库头文件，
- *   已核对以下标识符真实存在：
- *     BLEService / BLECharacteristic / BLEAdvertData / BLEUUID
- *     setNotifyProperty(bool) · setCCCDCallback(cb) · setBufferLen(len)
- *     setData(uint8_t*, len) · writeString(String) · notify(conn_id)
- *     BLE.init() · configAdvert()->setAdvData()/setScanRspData()
- *     BLE.configServer(n) · BLE.addService() · BLE.beginPeripheral()
- *     BLE.connected(conn_id) · GATT_CLIENT_CHAR_CONFIG_NOTIFY
- *
- * GATT（严格对齐 API_DESIGN.md Part A / client useBle.ts，与 ESP32 版相同）:
+ * GATT：
  *   Service           UUID 0xFFE0
- *   Measurement Char  UUID 0xFFE1   Notify   ← 每采样周期主动推送
- * 载荷格式：JSON 文本（与 useBle.parseMeasurement 一致）
- *   {"tds":320,"ph":7.2,"temperature":24.5,"turbidity":1.3,"ec":640}
+ *   Measurement Char  UUID 0xFFE1   Notify
  *
- * 依赖：Ameba Arduino 板管理包（安装后自带 BLEDevice.h 等 Ameba BLE 库）
- *   Arduino IDE → 首选项 → 附加开发板管理器网址：
- *     https://github.com/ambiot/ambd_arduino/raw/master/Arduino_package/package_realtek.com_amebad_index.json
- *   开发板选择：AmebaD ARM (32-bits) Boards → BW16 (RTL8720DN)
- * TODO：接入真实传感器读数替换 readSensors() 的模拟值
+ * BLE Notify JSON：
+ *   {"tds":320,"ph":7.2,"temperature":25.0,"turbidity":1.3,"ec":640,"wet":true}
+ *
+ * 默认接线：
+ *   pH        AO -> GPIO34 / ADC1_CH6
+ *   TDS/EC    AO -> GPIO35 / ADC1_CH7
+ *   Turbidity AO -> GPIO32 / ADC1_CH4
+ *   水位检测      -> GPIO27，使用 INPUT_PULLDOWN，入水导通到 3.3V 时 wet=true
+ *
+ * 重要：ESP32 ADC 输入不要超过 3.3V。
+ * 如果 5V 传感器模块 AO 可能输出 5V，请先电阻分压再接 ADC。
  */
 
-#include "BLEDevice.h"
-#include "SensorSample.h"
+#include <Arduino.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 
-#define SERVICE_UUID "0000FFE0-0000-1000-8000-00805F9B34FB"
-#define MEASUREMENT_UUID "0000FFE1-0000-1000-8000-00805F9B34FB"
-#define PAYLOAD_BUF_SIZE 128
+#define SERVICE_UUID        "0000ffe0-0000-1000-8000-00805f9b34fb"
+#define MEASUREMENT_UUID    "0000ffe1-0000-1000-8000-00805f9b34fb"
+#define PAYLOAD_BUF_SIZE    160
 
-BLEService measureService(SERVICE_UUID);
-BLECharacteristic measureChar(MEASUREMENT_UUID);
-BLEAdvertData advData;
-BLEAdvertData scanData;
-
-// central 是否已开启 Notify 订阅（由 CCCD 回调维护）
-bool notifyEnabled = false;
+BLECharacteristic* measureChar = nullptr;
+bool deviceConnected = false;
 
 const uint32_t SAMPLE_INTERVAL_MS = 700;
 uint32_t lastSample = 0;
 
-int luminance = 255;
+// ─────────────────────────────
+// ESP32 ADC 引脚：使用 ADC1，避免 ADC2 与 Wi-Fi/BLE 冲突
+// ─────────────────────────────
+const int PH_ADC_PIN = 34;         // ADC1_CH6，只能输入
+const int TDS_ADC_PIN = 35;        // ADC1_CH7，只能输入
+const int TURBIDITY_ADC_PIN = 32;  // ADC1_CH4
+const int WATER_LEVEL_PIN = 27;    // 数字输入
 
-// 水位检测：两根导线导通 = 高电平 → wet=true（水杯已浸没）
-#define WATER_LEVEL_PIN PA27
+// ESP32 Arduino 默认 12-bit ADC，即 0~4095
+const float ADC_REF_VOLTAGE = 3.3;
+const float ADC_MAX_VALUE = 4095.0;
+const int ADC_SAMPLE_COUNT = 21;   // 奇数，中值滤波
+const int ADC_SAMPLE_DELAY_MS = 4;
 
+// 分压还原系数：sensor_output_voltage = adc_pin_voltage * DIVIDER_RATIO
+// 3.3V 供电且 AO 不超过 3.3V：保持 1.0。
+// 5V 模块 AO 经 12k + 22k 分压：建议约 1.545。
+const float PH_DIVIDER_RATIO = 1.0;
+const float TDS_DIVIDER_RATIO = 1.0;
+const float TURBIDITY_DIVIDER_RATIO = 1.0;
 
-// CCCD 回调：central 写入 0x2902 时触发，判断是否开启了 Notify
-void measureCCCDCallback(BLECharacteristic* chr, uint8_t connID, uint16_t cccd) {
-  (void)chr;
-  (void)connID;
-  notifyEnabled = (cccd & GATT_CLIENT_CHAR_CONFIG_NOTIFY);
-  Serial.print("Notify subscription: ");
-  Serial.println(notifyEnabled ? "enabled" : "disabled");
+// 当前无独立温度探头，先用 25℃ 作为补偿基准
+const float DEFAULT_TEMPERATURE_C = 25.0;
+
+// pH 标定：pH 7.3 时 PO=2.46V；电压每下降约 0.18V，pH 增加 1
+const float PH_CAL = 7.30;
+const float PH_V_CAL = 2.460;
+const float PH_SLOPE = 0.180;
+
+// 浊度标定常量
+const float TURBIDITY_K_VALUE = 3347.19;
+
+// TDS ppm 常用近似：TDS = EC(µS/cm) * 0.5
+const float TDS_FACTOR = 0.5;
+
+struct Metrics {
+  float tds;
+  float ph;
+  float temperature;
+  float turbidity;
+  float ec;
+  bool wet;
+};
+
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* server) override {
+    (void)server;
+    deviceConnected = true;
+    Serial.println("BLE central connected");
+  }
+
+  void onDisconnect(BLEServer* server) override {
+    deviceConnected = false;
+    Serial.println("BLE central disconnected, restart advertising");
+    server->getAdvertising()->start();
+  }
+};
+
+float clampFloat(float value, float minValue, float maxValue) {
+  if (value < minValue) return minValue;
+  if (value > maxValue) return maxValue;
+  return value;
 }
 
-// TODO: 替换为真实传感器采集 + 标定换算
-// struct SensorSample { float tds, ph, temperature, turbidity, ec; };c:\Users\MxzfTn2N8Anx\Desktop\北A\sdg6_cup_client\firmware\cup_ble_bw16\SensorSample.h
+int readMedianAdc(int pin) {
+  int values[ADC_SAMPLE_COUNT];
 
-SensorSample readSensors() {
-  // 示例模拟值；实际接 TDS/pH/温度/浊度模块的 ADC 读数并换算
-  SensorSample m;
-  // m.tds = 100 + random(0, 500);
-  // m.ph = 6.5 + random(0, 200) / 100.0;
-  // m.temperature = 18 + random(0, 120) / 10.0;
-  // m.turbidity = random(0, 600) / 100.0;
-  // m.ec = 200 + random(0, 1000);
-  m.tds = 200;
-  m.ph = 7.2;
-  m.temperature = 20;
-  m.turbidity = 200;
-  m.ec = 400;
-  // 水位检测：两根导线导通=高电平 → 水杯已浸没
+  for (int i = 0; i < ADC_SAMPLE_COUNT; i++) {
+    values[i] = analogRead(pin);
+    delay(ADC_SAMPLE_DELAY_MS);
+  }
+
+  for (int j = 0; j < ADC_SAMPLE_COUNT - 1; j++) {
+    for (int i = 0; i < ADC_SAMPLE_COUNT - j - 1; i++) {
+      if (values[i] > values[i + 1]) {
+        int tmp = values[i];
+        values[i] = values[i + 1];
+        values[i + 1] = tmp;
+      }
+    }
+  }
+
+  return values[ADC_SAMPLE_COUNT / 2];
+}
+
+float readAdcPinVoltage(int pin) {
+  int raw = readMedianAdc(pin);
+  raw = (int)clampFloat((float)raw, 0.0, ADC_MAX_VALUE);
+  return raw * ADC_REF_VOLTAGE / ADC_MAX_VALUE;
+}
+
+float readSensorOutputVoltage(int pin, float dividerRatio) {
+  return readAdcPinVoltage(pin) * dividerRatio;
+}
+
+float calcPh(float voltage) {
+  // 电压低：更碱，pH 更高；电压高：更酸，pH 更低
+  float ph = PH_CAL + (PH_V_CAL - voltage) / PH_SLOPE;
+  return clampFloat(ph, 0.0, 14.0);
+}
+
+float calcEc(float voltage, float temperatureC) {
+  // 温度补偿至 25℃
+  float compensationCoefficient = 1.0 + 0.02 * (temperatureC - 25.0);
+  float compensationVoltage = voltage / compensationCoefficient;
+
+  // EC 换算，单位：µS/cm
+  float ec = 133.42 * compensationVoltage * compensationVoltage * compensationVoltage
+           - 255.86 * compensationVoltage * compensationVoltage
+           + 857.39 * compensationVoltage;
+
+  return clampFloat(ec, 0.0, 5000.0);
+}
+
+float calcTurbidity(float voltage, float temperatureC) {
+  float calibratedVoltage = -0.0192 * (temperatureC - 25.0) + voltage;
+  float ntu = -865.68 * calibratedVoltage + TURBIDITY_K_VALUE;
+  return clampFloat(ntu, 0.0, 3000.0);
+}
+
+Metrics readSensors() {
+  Metrics m;
+
+  float temperatureC = DEFAULT_TEMPERATURE_C;
+  float phVoltage = readSensorOutputVoltage(PH_ADC_PIN, PH_DIVIDER_RATIO);
+  float tdsVoltage = readSensorOutputVoltage(TDS_ADC_PIN, TDS_DIVIDER_RATIO);
+  float turbidityVoltage = readSensorOutputVoltage(TURBIDITY_ADC_PIN, TURBIDITY_DIVIDER_RATIO);
+
+  m.temperature = temperatureC;
+  m.ph = calcPh(phVoltage);
+  m.ec = calcEc(tdsVoltage, temperatureC);
+  m.tds = clampFloat(m.ec * TDS_FACTOR, 0.0, 3000.0);
+  m.turbidity = calcTurbidity(turbidityVoltage, temperatureC);
   m.wet = (digitalRead(WATER_LEVEL_PIN) == HIGH);
+
+  Serial.print("ADC voltage | pH=");
+  Serial.print(phVoltage, 3);
+  Serial.print("V TDS=");
+  Serial.print(tdsVoltage, 3);
+  Serial.print("V Turbidity=");
+  Serial.print(turbidityVoltage, 3);
+  Serial.print("V wet=");
+  Serial.println(m.wet ? "true" : "false");
+
   return m;
 }
 
-String toJson(const SensorSample& m) {
+String toJson(const Metrics& m) {
   char buf[PAYLOAD_BUF_SIZE];
   snprintf(buf, sizeof(buf),
-           "{\"tds\":%.0f,\"ph\":%.2f,\"temperature\":%.1f,\"turbidity\":%.2f,\"ec\":%.0f,\"wet\":%s}",
-           m.tds, m.ph, m.temperature, m.turbidity, m.ec, m.wet ? "true" : "false");
+    "{\"tds\":%.0f,\"ph\":%.2f,\"temperature\":%.1f,\"turbidity\":%.2f,\"ec\":%.0f,\"wet\":%s}",
+    m.tds, m.ph, m.temperature, m.turbidity, m.ec, m.wet ? "true" : "false");
   return String(buf);
 }
 
-
 void setup() {
-  pinMode(LED_R, OUTPUT);
-  pinMode(LED_G, OUTPUT);
-  pinMode(LED_B, OUTPUT);
-  led(255,0,0);
-
-  // 水位检测引脚：外部下拉，导通时被拉高 → HIGH=浸没
-  pinMode(WATER_LEVEL_PIN, INPUT);
-
-
   Serial.begin(115200);
-  // 广播：Flags + 设备名放主广播；服务 UUID 放扫描响应，避免 31 字节溢出
-  advData.addFlags(GAP_ADTYPE_FLAGS_LIMITED | GAP_ADTYPE_FLAGS_BREDR_NOT_SUPPORTED);
-  advData.addCompleteName("AquaCup-01");
-  scanData.addCompleteServices(BLEUUID(SERVICE_UUID));
-
-  // Measurement 特征：仅 Notify（对齐 ESP32 版 PROPERTY_NOTIFY）
-  measureChar.setNotifyProperty(true);
-  measureChar.setCCCDCallback(measureCCCDCallback);
-  measureChar.setBufferLen(PAYLOAD_BUF_SIZE);
-
-  measureService.addCharacteristic(measureChar);
-
-  BLE.init();
-  BLE.configAdvert()->setAdvData(advData);
-  BLE.configAdvert()->setScanRspData(scanData);
-  BLE.configServer(1);
-  BLE.addService(measureService);
-
-  BLE.beginPeripheral();
-  led(0,255,0);
-  Serial.println("BLE advertising as AquaCup-01");
   delay(200);
+
+  analogReadResolution(12);
+  analogSetPinAttenuation(PH_ADC_PIN, ADC_11db);
+  analogSetPinAttenuation(TDS_ADC_PIN, ADC_11db);
+  analogSetPinAttenuation(TURBIDITY_ADC_PIN, ADC_11db);
+
+  pinMode(PH_ADC_PIN, INPUT);
+  pinMode(TDS_ADC_PIN, INPUT);
+  pinMode(TURBIDITY_ADC_PIN, INPUT);
+  pinMode(WATER_LEVEL_PIN, INPUT_PULLDOWN);
+
+  BLEDevice::init("AquaCup-01");
+
+  BLEServer* server = BLEDevice::createServer();
+  server->setCallbacks(new ServerCallbacks());
+
+  BLEService* service = server->createService(SERVICE_UUID);
+
+  measureChar = service->createCharacteristic(
+    MEASUREMENT_UUID,
+    BLECharacteristic::PROPERTY_NOTIFY
+  );
+
+  // 0x2902 CCCD，让手机端可以订阅 Notify
+  measureChar->addDescriptor(new BLE2902());
+
+  service->start();
+
+  BLEAdvertising* advertising = BLEDevice::getAdvertising();
+  advertising->addServiceUUID(SERVICE_UUID);
+  advertising->setScanResponse(true);
+  advertising->setMinPreferred(0x06);
+  advertising->setMinPreferred(0x12);
+  BLEDevice::startAdvertising();
+
+  Serial.println("AquaCup ESP32 booted with real ADC sensors");
+  Serial.println("BLE advertising as AquaCup-01");
 }
 
 void loop() {
-  led(255, 255, 255);
-    // conn_id 0 为首个连接；断开后 Ameba 会自动恢复广播
-    if (BLE.connected(0) && notifyEnabled && millis() - lastSample >= SAMPLE_INTERVAL_MS) {
+  if (deviceConnected && millis() - lastSample >= SAMPLE_INTERVAL_MS) {
     lastSample = millis();
+
     String payload = toJson(readSensors());
-    measureChar.writeString(payload);  // 写入特征值缓冲
-    measureChar.notify(0);             // 向 conn_id 0 推送 Notify
+    measureChar->setValue((uint8_t*)payload.c_str(), payload.length());
+    measureChar->notify();
+
     Serial.println(payload);
   }
-  delay(10);
-}
 
-void led(int r, int g, int b) {
-  analogWrite(LED_R, r * luminance / 255);
-  digitalWrite(LED_G, g * luminance / 255);
-  analogWrite(LED_B, b * luminance / 255);
+  delay(10);
 }

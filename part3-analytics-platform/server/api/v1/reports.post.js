@@ -8,6 +8,29 @@ import { getReportById } from '../../utils/mappers.js';
 
 export default defineApiHandler(async (event) => {
   const body = await readBody(event) || {};
+
+  // 兼容客户端新版采集契约：
+  // 客户端把 20 条稳定原始数据和众数评级放在 capture 内；
+  // 后端入库契约历史上要求 raw_samples / grade / grade_index 在顶层。
+  // 这里在校验前做一次归一化，避免联调时出现
+  // “missing required field: body.raw_samples”。
+  const capture = body.capture || {};
+  if (!body.raw_samples && Array.isArray(capture.raw_samples)) {
+    body.raw_samples = capture.raw_samples;
+  }
+  if (body.grade === undefined && capture.grade !== undefined) {
+    body.grade = capture.grade;
+  }
+  if (body.grade_index === undefined && capture.grade_index !== undefined) {
+    body.grade_index = capture.grade_index;
+  }
+  if (!body.metrics && capture.metrics) {
+    body.metrics = capture.metrics;
+  }
+  if (body.location?.region && !body.location.address) {
+    body.location.address = body.location.region;
+  }
+
   requireFields(body, ['device_id', 'location', 'water_type', 'metrics', 'grade', 'grade_index', 'authenticity_confirmed', 'raw_samples']);
   requireFields(body.location, ['lat', 'lng'], 'body.location');
   requireFields(body.metrics, ['temperature', 'ph', 'ec', 'turbidity'], 'body.metrics');

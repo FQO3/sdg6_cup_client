@@ -11,7 +11,7 @@
       </div>
       <div class="hero-actions">
         <button class="ink-btn" @click="refreshAll">刷新态势</button>
-        <button class="ghost-btn cluster" @click="runKMeansClustering" :disabled="clusterLoading">{{ clusterLoading ? 'K-Means 聚类中…' : '地理/水质 K-Means' }}</button>
+        <button class="ghost-btn cluster" @click="runKMeansClustering" :disabled="clusterLoading">{{ clusterLoading ? 'K-Means 聚类中…' : '地理 K-Means' }}</button>
         <button class="ghost-btn" @click="createRegionInsight" :disabled="insightLoading">{{ insightLoading ? 'LLM 生成中…' : '生成区域提案' }}</button>
         <button class="ghost-btn hot" @click="startLstmJob" :disabled="lstmLoading">{{ lstmLoading ? 'LSTM 排队中…' : '启动时序分析' }}</button>
       </div>
@@ -71,7 +71,7 @@
               <button class="popover-close" @click="selectedCluster = null" aria-label="关闭聚类信息">×</button>
             </div>
             <dl class="point-detail-list">
-              <div><dt>类型</dt><dd>{{ selectedCluster.cluster_type === 'geo' ? '地理聚类' : '水质聚类' }} · {{ selectedCluster.count }} samples</dd></div>
+              <div><dt>类型</dt><dd>地理聚类 · {{ selectedCluster.count }} samples</dd></div>
               <div><dt>位置</dt><dd>{{ locationLabel(selectedCluster) }}</dd></div>
               <div><dt>等级</dt><dd>平均 {{ fixed(selectedCluster.summary?.avg_grade_index) }} · {{ selectedCluster.summary?.dominant_grade || '—' }}</dd></div>
             </dl>
@@ -86,7 +86,6 @@
         <div v-if="clusterRun" class="cluster-strip">
           <span>Run: {{ clusterRun.run_uuid.slice(0, 8) }}</span>
           <span>地理聚类 {{ geoClusters.length }} 组</span>
-          <span>TDS/EC/浊度/pH 聚类 {{ waterClusters.length }} 组</span>
           <span>地图仅圈地理聚类 · 半径≤1000m</span>
         </div>
       </div>
@@ -98,24 +97,42 @@
             <h2>区域基金优先级</h2>
           </div>
         </div>
-        <div class="district-list">
-          <article v-for="d in districts" :key="d.district" class="district-row">
-            <div><b>{{ d.district }}</b><span>{{ d.count }} samples</span></div>
-            <meter min="0" max="5" :value="d.avg_grade_index || 0"></meter>
-            <strong>{{ fixed(d.avg_grade_index) }}</strong>
-          </article>
-        </div>
-        <div v-if="geoClusters.length || waterClusters.length" class="cluster-list">
-          <h3>地理 + 水质信息聚类结果</h3>
-          <article v-for="c in [...geoClusters, ...waterClusters]" :key="c.cluster_uuid" class="cluster-row" :style="{ '--c': c.color }" @click="selectCluster(c)">
-            <div>
-              <b>{{ c.label }}</b>
-              <span>{{ c.cluster_type === 'geo' ? '地图圈定地理相近点' : '按 TDS/EC/浊度/pH 相似分组' }} · {{ c.count }} samples</span>
-              <small>{{ locationLabel(c) }}</small>
+        <section class="side-fold">
+          <button class="fold-head" @click="districtFoldOpen = !districtFoldOpen" :aria-expanded="districtFoldOpen">
+            <span>基金优先级排序</span>
+            <em>{{ sortedDistricts.length }} districts</em>
+            <i>{{ districtFoldOpen ? '−' : '+' }}</i>
+          </button>
+          <Transition name="fold">
+            <div v-show="districtFoldOpen" class="district-list fold-body">
+              <article v-for="(d, idx) in sortedDistricts" :key="d.district" class="district-row">
+                <span class="rank-badge" :class="{ podium: idx < 3 }">{{ String(idx + 1).padStart(2, '0') }}</span>
+                <div><b>{{ d.district }}</b><span>{{ d.count }} samples</span></div>
+                <meter min="0" max="5" :value="d.avg_grade_index || 0"></meter>
+                <strong>{{ fixed(d.avg_grade_index) }}</strong>
+              </article>
             </div>
-            <strong>{{ fixed(c.summary?.avg_grade_index) }}</strong>
-          </article>
-        </div>
+          </Transition>
+        </section>
+        <section v-if="geoClusters.length" class="side-fold cluster-fold">
+          <button class="fold-head" @click="clusterFoldOpen = !clusterFoldOpen" :aria-expanded="clusterFoldOpen">
+            <span>地理聚类结果</span>
+            <em>{{ geoClusters.length }} clusters</em>
+            <i>{{ clusterFoldOpen ? '−' : '+' }}</i>
+          </button>
+          <Transition name="fold">
+            <div v-show="clusterFoldOpen" class="cluster-list fold-body">
+              <article v-for="c in geoClusters" :key="c.cluster_uuid" class="cluster-row" :style="{ '--c': c.color }" @click="selectCluster(c)">
+                <div>
+                  <b>{{ c.label }}</b>
+                  <span>地图圈定地理相近点 · {{ c.count }} samples</span>
+                  <small>{{ locationLabel(c) }}</small>
+                </div>
+                <strong>{{ fixed(c.summary?.avg_grade_index) }}</strong>
+              </article>
+            </div>
+          </Transition>
+        </section>
       </aside>
     </section>
 
@@ -166,9 +183,10 @@ const latestInsight = ref(null);
 const latestJob = ref(null);
 const clusterRun = ref(null);
 const geoClusters = ref([]);
-const waterClusters = ref([]);
 const selectedMapPoint = ref(null);
 const selectedCluster = ref(null);
+const districtFoldOpen = ref(true);
+const clusterFoldOpen = ref(true);
 const insightLoading = ref(false);
 const lstmLoading = ref(false);
 const clusterLoading = ref(false);
@@ -179,6 +197,7 @@ let mapMarkers = [];
 let mapClusterOverlays = [];
 let pollTimer;
 const clusterPolygons = computed(() => geoClusters.value.filter((cluster) => Array.isArray(cluster.polygon) && cluster.polygon.length >= 3));
+const sortedDistricts = computed(() => [...districts.value].sort((a, b) => (b.avg_grade_index || 0) - (a.avg_grade_index || 0)));
 
 const waterNames = { tap: '自来水', river: '河水', lake: '湖水', well: '井水/地下水', purified: '纯净水/过滤水', mineral: '矿泉水', boiled: '煮沸后的水', other: '其他' };
 const waterLabel = (type) => waterNames[type] || type;
@@ -264,9 +283,7 @@ function polygonPath(cluster) {
 function locationLabel(cluster) {
   const location = cluster.location || {};
   const address = location.formatted_address || [location.city, location.district].filter(Boolean).join('');
-  const metrics = cluster.center || {};
-  if (cluster.cluster_type === 'geo') return address || `中心 ${fixed(cluster.center?.lat)}, ${fixed(cluster.center?.lng)}`;
-  return `TDS ${fixed(metrics.tds)} · EC ${fixed(metrics.ec)} · 浊度 ${fixed(metrics.turbidity)} · pH ${fixed(metrics.ph)}`;
+  return address || `中心 ${fixed(cluster.center?.lat)}, ${fixed(cluster.center?.lng)}`;
 }
 
 async function refreshAll() {
@@ -290,11 +307,9 @@ async function loadLatestClusters() {
     const res = await $fetch('/api/v1/analysis/clusters');
     clusterRun.value = res.data.run;
     geoClusters.value = res.data.geo_clusters || [];
-    waterClusters.value = res.data.water_quality_clusters || [];
   } catch {
     clusterRun.value = null;
     geoClusters.value = [];
-    waterClusters.value = [];
   }
 }
 
@@ -303,11 +318,10 @@ async function runKMeansClustering() {
   try {
     const res = await $fetch('/api/v1/analysis/clusters/kmeans', {
       method: 'POST',
-      body: { city: 'beijing', limit: 800, geo_k: 0, water_k: 6, max_spatial_k: 800, geo_max_radius_m: 1000, geocode: true }
+      body: { city: 'beijing', limit: 800, geo_k: 0, water_k: 0, max_spatial_k: 800, geo_max_radius_m: 1000, geocode: true }
     });
     clusterRun.value = res.data.run;
     geoClusters.value = res.data.geo_clusters || [];
-    waterClusters.value = res.data.water_quality_clusters || [];
     renderAmapMarkers();
   } finally {
     clusterLoading.value = false;
@@ -497,10 +511,21 @@ button:disabled { opacity: .55; cursor: wait; }
 .cluster-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 .cluster-strip span { border: 1px solid rgba(104,225,208,.20); border-radius: 999px; padding: 7px 10px; color: var(--cyan); font-size: 12px; background: rgba(104,225,208,.06); }
 .district-list, .report-feed, .cluster-list { display: grid; gap: 10px; }
-.cluster-list { margin-top: 14px; }
-.cluster-list h3 { margin: 2px 0 0; color: var(--cyan); font: 20px 'Bebas Neue', sans-serif; letter-spacing: .06em; }
+.side-fold { border: 1px solid rgba(245,239,217,.10); border-radius: 22px; padding: 10px; background: linear-gradient(180deg, rgba(104,225,208,.07), rgba(3,8,7,.20)); box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
+.side-fold + .side-fold { margin-top: 12px; }
+.cluster-fold { background: linear-gradient(180deg, rgba(255,183,74,.06), rgba(3,8,7,.20)); }
+.fold-head { width: 100%; display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; border: 0; border-radius: 16px; padding: 11px 12px; color: var(--ink); background: rgba(245,239,217,.06); text-align: left; }
+.fold-head span { font: 20px/1 'Bebas Neue', sans-serif; letter-spacing: .06em; }
+.fold-head em { color: var(--muted); font-size: 12px; }
+.fold-head i { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: var(--cyan); background: rgba(104,225,208,.10); font-style: normal; }
+.fold-body { padding-top: 10px; }
+.fold-enter-active, .fold-leave-active { transition: opacity .2s ease, transform .2s ease; }
+.fold-enter-from, .fold-leave-to { opacity: 0; transform: translateY(-6px); }
 .district-row, .report-item, .job-card, .cluster-row { border: 1px solid rgba(245,239,217,.11); border-radius: 18px; background: rgba(3,8,7,.32); padding: 13px; }
-.district-row { display: grid; grid-template-columns: 1fr 90px 42px; align-items: center; gap: 12px; }
+.district-row { display: grid; grid-template-columns: 48px minmax(0, 1fr) 82px 42px; align-items: center; gap: 10px; }
+.district-row > strong { justify-self: center; text-align: center; }
+.rank-badge { justify-self: center; display: grid; place-items: center; width: 44px; height: 34px; border-radius: 12px; color: var(--cyan); background: rgba(104,225,208,.10); border: 1px solid rgba(104,225,208,.20); font: 18px/34px 'Bebas Neue', sans-serif; letter-spacing: .035em; font-variant-numeric: tabular-nums; text-align: center; }
+.rank-badge.podium { color: #ffd797; background: linear-gradient(135deg, rgba(255,183,74,.18), rgba(104,225,208,.08)); border-color: rgba(255,183,74,.32); }
 .cluster-row { display: grid; grid-template-columns: 1fr 42px; align-items: center; gap: 12px; border-color: color-mix(in srgb, var(--c), transparent 68%); box-shadow: inset 4px 0 0 var(--c); cursor: pointer; }
 .cluster-row:hover { background: color-mix(in srgb, var(--c), transparent 92%); }
 .district-row b, .report-item b, .cluster-row b { display: block; color: var(--ink); }

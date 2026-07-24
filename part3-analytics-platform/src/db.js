@@ -76,6 +76,66 @@ export function initDb() {
 
     CREATE INDEX IF NOT EXISTS idx_analysis_jobs_job_id ON analysis_jobs(job_id);
     CREATE INDEX IF NOT EXISTS idx_analysis_jobs_scope ON analysis_jobs(job_type, scope_type, scope_id, status);
+
+    CREATE TABLE IF NOT EXISTS water_quality_cluster_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_uuid TEXT NOT NULL UNIQUE,
+      algorithm TEXT NOT NULL,
+      scope_city TEXT,
+      scope_district TEXT,
+      real_only INTEGER NOT NULL DEFAULT 0,
+      input_count INTEGER NOT NULL,
+      geo_k INTEGER NOT NULL,
+      water_k INTEGER NOT NULL,
+      request_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cluster_runs_scope ON water_quality_cluster_runs(scope_city, scope_district, created_at);
+
+    CREATE TABLE IF NOT EXISTS water_quality_clusters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cluster_uuid TEXT NOT NULL UNIQUE,
+      run_uuid TEXT NOT NULL,
+      cluster_type TEXT NOT NULL,
+      cluster_index INTEGER NOT NULL,
+      label TEXT NOT NULL,
+      center_lat REAL,
+      center_lng REAL,
+      radius_m REAL,
+      min_lat REAL,
+      max_lat REAL,
+      min_lng REAL,
+      max_lng REAL,
+      center_tds REAL,
+      center_ph REAL,
+      center_turbidity REAL,
+      center_ec REAL,
+      count INTEGER NOT NULL,
+      location_json TEXT,
+      summary_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (run_uuid) REFERENCES water_quality_cluster_runs(run_uuid) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_clusters_run ON water_quality_clusters(run_uuid, cluster_type, cluster_index);
+
+    CREATE TABLE IF NOT EXISTS water_quality_cluster_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      member_uuid TEXT NOT NULL UNIQUE,
+      run_uuid TEXT NOT NULL,
+      cluster_uuid TEXT NOT NULL,
+      report_id TEXT NOT NULL,
+      cluster_type TEXT NOT NULL,
+      distance REAL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (run_uuid) REFERENCES water_quality_cluster_runs(run_uuid) ON DELETE CASCADE,
+      FOREIGN KEY (cluster_uuid) REFERENCES water_quality_clusters(cluster_uuid) ON DELETE CASCADE,
+      FOREIGN KEY (report_id) REFERENCES reports(report_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cluster_members_run ON water_quality_cluster_members(run_uuid, cluster_type, cluster_uuid);
+    CREATE INDEX IF NOT EXISTS idx_cluster_members_report ON water_quality_cluster_members(report_id);
   `);
 }
 

@@ -11,6 +11,7 @@
       </div>
       <div class="hero-actions">
         <button class="ink-btn" @click="refreshAll">刷新态势</button>
+        <button class="ghost-btn cluster" @click="runKMeansClustering" :disabled="clusterLoading">{{ clusterLoading ? 'K-Means 聚类中…' : '地理/水质 K-Means' }}</button>
         <button class="ghost-btn" @click="createRegionInsight" :disabled="insightLoading">{{ insightLoading ? 'LLM 生成中…' : '生成区域提案' }}</button>
         <button class="ghost-btn hot" @click="startLstmJob" :disabled="lstmLoading">{{ lstmLoading ? 'LSTM 排队中…' : '启动时序分析' }}</button>
       </div>
@@ -34,11 +35,20 @@
         </div>
         <div id="amap" class="amap-canvas">
           <div v-if="!amapReady" class="fallback-map">
+            <svg class="fallback-polygons" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <polygon v-for="c in clusterPolygons" :key="c.cluster_uuid" :points="fallbackPolygonPoints(c)" :fill="`${c.color}18`" :stroke="c.color" stroke-width="0.55" stroke-linejoin="round" />
+            </svg>
             <span v-for="m in markers.slice(0, 24)" :key="m.report_id" class="fallback-dot" :style="dotStyle(m)"></span>
           </div>
         </div>
         <div class="map-legend">
           <span v-for="g in gradeDistribution" :key="g.grade" :style="{ '--c': g.color }"><i></i>{{ g.grade }} · {{ g.count }}</span>
+        </div>
+        <div v-if="clusterRun" class="cluster-strip">
+          <span>Run: {{ clusterRun.run_uuid.slice(0, 8) }}</span>
+          <span>地理聚类 {{ geoClusters.length }} 组</span>
+          <span>TDS/EC/浊度/pH 聚类 {{ waterClusters.length }} 组</span>
+          <span>地图仅圈地理聚类 · 半径≤1000m</span>
         </div>
       </div>
 
@@ -54,6 +64,17 @@
             <div><b>{{ d.district }}</b><span>{{ d.count }} samples</span></div>
             <meter min="0" max="5" :value="d.avg_grade_index || 0"></meter>
             <strong>{{ fixed(d.avg_grade_index) }}</strong>
+          </article>
+        </div>
+        <div v-if="geoClusters.length || waterClusters.length" class="cluster-list">
+          <h3>地理 + 水质信息聚类结果</h3>
+          <article v-for="c in [...geoClusters, ...waterClusters]" :key="c.cluster_uuid" class="cluster-row" :style="{ '--c': c.color }">
+            <div>
+              <b>{{ c.label }}</b>
+              <span>{{ c.cluster_type === 'geo' ? '地图圈定地理相近点' : '按 TDS/EC/浊度/pH 相似分组' }} · {{ c.count }} samples</span>
+              <small>{{ locationLabel(c) }}</small>
+            </div>
+            <strong>{{ fixed(c.summary?.avg_grade_index) }}</strong>
           </article>
         </div>
       </aside>
@@ -99,12 +120,18 @@ const gradeDistribution = ref([]);
 const kpis = ref({});
 const latestInsight = ref(null);
 const latestJob = ref(null);
+const clusterRun = ref(null);
+const geoClusters = ref([]);
+const waterClusters = ref([]);
 const insightLoading = ref(false);
 const lstmLoading = ref(false);
+const clusterLoading = ref(false);
 const amapReady = ref(false);
 let map;
 let mapMarkers = [];
+let mapClusterOverlays = [];
 let pollTimer;
+const clusterPolygons = computed(() => geoClusters.value.filter((cluster) => Array.isArray(cluster.polygon) && cluster.polygon.length >= 3));
 
 const waterNames = { tap: '自来水', river: '河水', lake: '湖水', well: '井水/地下水', purified: '纯净水/过滤水', mineral: '矿泉水', boiled: '煮沸后的水', other: '其他' };
 const waterLabel = (type) => waterNames[type] || type;
@@ -122,6 +149,56 @@ function dotStyle(m) {
   };
 }
 
+function fallbackClusterStyle(cluster, shape) {
+  const minLng = Number(cluster.bounds?.min_lng || cluster.center?.lng || 116.4);
+  const maxLng = Number(cluster.bounds?.max_lng || cluster.center?.lng || 116.4);
+  const minLat = Number(cluster.bounds?.min_lat || cluster.center?.lat || 39.9);
+  const maxLat = Number(cluster.bounds?.max_lat || cluster.center?.lat || 39.9);
+  const left = Math.max(4, Math.min(94, ((minLng - 115.6) / 1.7) * 100));
+  const right = Math.max(6, Math.min(96, ((maxLng - 115.6) / 1.7) * 100));
+  const top = Math.max(4, Math.min(94, (1 - ((maxLat - 39.45) / 1.25)) * 100));
+  const bottom = Math.max(6, Math.min(96, (1 - ((minLat - 39.45) / 1.25)) * 100));
+  const pad = shape === 'circle' ? 5 : 2;
+  return {
+    left: `${Math.max(2, left - pad)}%`,
+    top: `${Math.max(2, top - pad)}%`,
+    width: `${Math.max(9, right - left + pad * 2)}%`,
+    height: `${Math.max(9, bottom - top + pad * 2)}%`,
+    borderColor: cluster.color,
+    boxShadow: `0 0 24px ${cluster.color}55`
+  };
+}
+
+function fallbackPoint(position) {
+  const lng = Number(position?.[0] || 116.4);
+  const lat = Number(position?.[1] || 39.9);
+  const x = Math.max(3, Math.min(97, ((lng - 115.6) / 1.7) * 100));
+  const y = Math.max(3, Math.min(97, (1 - ((lat - 39.45) / 1.25)) * 100));
+  return `${x.toFixed(2)},${y.toFixed(2)}`;
+}
+
+function fallbackPolygonPoints(cluster) {
+  return (cluster.polygon || []).map(fallbackPoint).join(' ');
+}
+
+function polygonPath(cluster) {
+  if (Array.isArray(cluster.polygon) && cluster.polygon.length >= 3) return cluster.polygon;
+  const bounds = cluster.bounds || {};
+  const minLng = Number(bounds.min_lng || cluster.center?.lng || 116.4);
+  const maxLng = Number(bounds.max_lng || cluster.center?.lng || 116.4);
+  const minLat = Number(bounds.min_lat || cluster.center?.lat || 39.9);
+  const maxLat = Number(bounds.max_lat || cluster.center?.lat || 39.9);
+  return [[minLng, minLat], [maxLng, minLat], [maxLng, maxLat], [minLng, maxLat]];
+}
+
+function locationLabel(cluster) {
+  const location = cluster.location || {};
+  const address = location.formatted_address || [location.city, location.district].filter(Boolean).join('');
+  const metrics = cluster.center || {};
+  if (cluster.cluster_type === 'geo') return address || `中心 ${fixed(cluster.center?.lat)}, ${fixed(cluster.center?.lng)}`;
+  return `TDS ${fixed(metrics.tds)} · EC ${fixed(metrics.ec)} · 浊度 ${fixed(metrics.turbidity)} · pH ${fixed(metrics.ph)}`;
+}
+
 async function refreshAll() {
   const [overviewRes, mapRes, districtRes, reportsRes] = await Promise.all([
     $fetch('/api/v1/dashboard/overview?city=beijing'),
@@ -134,7 +211,37 @@ async function refreshAll() {
   districts.value = districtRes.data.districts;
   gradeDistribution.value = districtRes.data.grade_distribution;
   reports.value = reportsRes.data.items;
+  await loadLatestClusters();
   renderAmapMarkers();
+}
+
+async function loadLatestClusters() {
+  try {
+    const res = await $fetch('/api/v1/analysis/clusters');
+    clusterRun.value = res.data.run;
+    geoClusters.value = res.data.geo_clusters || [];
+    waterClusters.value = res.data.water_quality_clusters || [];
+  } catch {
+    clusterRun.value = null;
+    geoClusters.value = [];
+    waterClusters.value = [];
+  }
+}
+
+async function runKMeansClustering() {
+  clusterLoading.value = true;
+  try {
+    const res = await $fetch('/api/v1/analysis/clusters/kmeans', {
+      method: 'POST',
+      body: { city: 'beijing', limit: 800, geo_k: 0, water_k: 6, max_spatial_k: 800, geo_max_radius_m: 1000, geocode: true }
+    });
+    clusterRun.value = res.data.run;
+    geoClusters.value = res.data.geo_clusters || [];
+    waterClusters.value = res.data.water_quality_clusters || [];
+    renderAmapMarkers();
+  } finally {
+    clusterLoading.value = false;
+  }
 }
 
 function loadAmapScript() {
@@ -163,7 +270,7 @@ async function initAmap() {
 
 function renderAmapMarkers() {
   if (!map || !window.AMap) return;
-  map.remove(mapMarkers);
+  map.remove([...mapMarkers, ...mapClusterOverlays]);
   mapMarkers = markers.value.map((m) => new window.AMap.CircleMarker({
     center: [m.lng, m.lat],
     radius: 9 + Math.max(0, m.grade_index || 0),
@@ -176,7 +283,19 @@ function renderAmapMarkers() {
     extData: m
   }));
   mapMarkers.forEach((mk) => mk.on('click', () => createPointInsight(mk.getExtData().report_id)));
-  map.add(mapMarkers);
+  mapClusterOverlays = geoClusters.value
+    .map((cluster) => new window.AMap.Polygon({
+      path: polygonPath(cluster),
+      strokeColor: cluster.color,
+      strokeOpacity: 0.9,
+      strokeWeight: 2,
+      strokeStyle: 'solid',
+      fillColor: cluster.color,
+      fillOpacity: 0.075,
+      zIndex: 7,
+      extData: cluster
+    }));
+  map.add([...mapClusterOverlays, ...mapMarkers]);
 }
 
 async function createRegionInsight() {
@@ -243,6 +362,7 @@ h2 { font-size: 34px; }
 button { font-family: inherit; cursor: pointer; }
 .ink-btn, .ghost-btn { border: 0; border-radius: 999px; padding: 13px 18px; color: #08110f; background: var(--cyan); box-shadow: 0 16px 42px rgba(104,225,208,.18); }
 .ghost-btn { color: var(--ink); background: rgba(245,239,217,.08); border: 1px solid rgba(245,239,217,.18); backdrop-filter: blur(10px); }
+.ghost-btn.cluster { border-color: rgba(104,225,208,.45); color: var(--cyan); }
 .ghost-btn.hot { border-color: rgba(255,183,74,.34); color: #ffd797; }
 button:disabled { opacity: .55; cursor: wait; }
 .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 14px; }
@@ -260,15 +380,22 @@ button:disabled { opacity: .55; cursor: wait; }
 .live-dot { color: var(--cyan); font: 12px 'Bebas Neue', sans-serif; letter-spacing: .14em; }
 .amap-canvas { height: 520px; border-radius: 24px; overflow: hidden; background: linear-gradient(145deg, #10221e, #030807); position: relative; border: 1px solid rgba(104,225,208,.16); }
 .fallback-map { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(104,225,208,.08) 1px, transparent 1px), linear-gradient(rgba(104,225,208,.08) 1px, transparent 1px); background-size: 64px 64px; }
+.fallback-polygons { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; filter: drop-shadow(0 0 14px rgba(104,225,208,.18)); }
 .fallback-dot { position: absolute; width: 15px; height: 15px; border-radius: 50%; box-shadow: 0 0 0 6px rgba(255,255,255,.08), 0 0 28px currentColor; transform: translate(-50%, -50%); }
 .map-legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 13px; color: #cfc7ad; font-size: 13px; }
 .map-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .map-legend i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
-.district-list, .report-feed { display: grid; gap: 10px; }
-.district-row, .report-item, .job-card { border: 1px solid rgba(245,239,217,.11); border-radius: 18px; background: rgba(3,8,7,.32); padding: 13px; }
+.cluster-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.cluster-strip span { border: 1px solid rgba(104,225,208,.20); border-radius: 999px; padding: 7px 10px; color: var(--cyan); font-size: 12px; background: rgba(104,225,208,.06); }
+.district-list, .report-feed, .cluster-list { display: grid; gap: 10px; }
+.cluster-list { margin-top: 14px; }
+.cluster-list h3 { margin: 2px 0 0; color: var(--cyan); font: 20px 'Bebas Neue', sans-serif; letter-spacing: .06em; }
+.district-row, .report-item, .job-card, .cluster-row { border: 1px solid rgba(245,239,217,.11); border-radius: 18px; background: rgba(3,8,7,.32); padding: 13px; }
 .district-row { display: grid; grid-template-columns: 1fr 90px 42px; align-items: center; gap: 12px; }
-.district-row b, .report-item b { display: block; color: var(--ink); }
-.district-row span { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+.cluster-row { display: grid; grid-template-columns: 1fr 42px; align-items: center; gap: 12px; border-color: color-mix(in srgb, var(--c), transparent 68%); box-shadow: inset 4px 0 0 var(--c); }
+.district-row b, .report-item b, .cluster-row b { display: block; color: var(--ink); }
+.district-row span, .cluster-row span, .cluster-row small { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+.cluster-row strong { color: var(--c); }
 meter { width: 100%; accent-color: var(--amber); }
 .report-item { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; color: inherit; text-align: left; }
 .grade-pill { color: white; padding: 6px 9px; border-radius: 999px; font: 13px 'Noto Serif SC', serif; min-width: 38px; text-align: center; }

@@ -115,7 +115,12 @@
       </article>
 
       <article class="ai-panel reveal" style="--delay: 460ms">
-        <div class="panel-head compact"><div><p class="eyebrow">LLM + LSTM Orchestration</p><h2>外部模型回传</h2></div></div>
+        <div class="panel-head compact">
+          <div><p class="eyebrow">LLM + LSTM Orchestration</p><h2>外部模型回传</h2></div>
+          <button class="ghost-btn danger small" @click="clearLlmData" :disabled="llmClearLoading">
+            {{ llmClearLoading ? '清空中…' : '清空 LLM 数据' }}
+          </button>
+        </div>
         <div class="status-strip">
           <span>LLM: {{ insightLoading ? 'running' : 'ready' }}</span>
           <span>LSTM: {{ latestJob?.status || 'idle' }}</span>
@@ -149,6 +154,7 @@ const selectedMapPoint = ref(null);
 const insightLoading = ref(false);
 const lstmLoading = ref(false);
 const clusterLoading = ref(false);
+const llmClearLoading = ref(false);
 const amapReady = ref(false);
 let map;
 let mapMarkers = [];
@@ -358,6 +364,17 @@ async function createPointInsight(reportId) {
   }
 }
 
+async function clearLlmData() {
+  if (!window.confirm('确认清空所有 LLM 数据？')) return;
+  llmClearLoading.value = true;
+  try {
+    await $fetch('/api/v1/insights/records', { method: 'DELETE' });
+    latestInsight.value = null;
+  } finally {
+    llmClearLoading.value = false;
+  }
+}
+
 async function startLstmJob() {
   lstmLoading.value = true;
   try {
@@ -404,6 +421,8 @@ button { font-family: inherit; cursor: pointer; }
 .ghost-btn { color: var(--ink); background: rgba(245,239,217,.08); border: 1px solid rgba(245,239,217,.18); backdrop-filter: blur(10px); }
 .ghost-btn.cluster { border-color: rgba(104,225,208,.45); color: var(--cyan); }
 .ghost-btn.hot { border-color: rgba(255,183,74,.34); color: #ffd797; }
+.ghost-btn.danger { border-color: rgba(255,93,61,.42); color: #ff9a82; }
+.ghost-btn.small { padding: 9px 13px; font-size: 13px; }
 button:disabled { opacity: .55; cursor: wait; }
 .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 14px; }
 .kpi-card, .map-panel, .intel-panel, .feed-panel, .ai-panel { border: 1px solid rgba(245,239,217,.14); background: linear-gradient(180deg, rgba(245,239,217,.09), rgba(245,239,217,.035)); box-shadow: 0 24px 80px rgba(0,0,0,.28); backdrop-filter: blur(18px); }

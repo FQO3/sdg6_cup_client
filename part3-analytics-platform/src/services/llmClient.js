@@ -27,6 +27,30 @@ async function postJson(url, body, timeoutMs, serviceName) {
   }
 }
 
+async function deleteJson(url, timeoutMs, serviceName) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: 'DELETE',
+      signal: controller.signal
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new ApiError(3001, `${serviceName} service error`, 502, payload);
+    }
+    return payload;
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new ApiError(3002, `${serviceName} service timeout`, 504);
+    }
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(3001, `${serviceName} service unavailable: ${error.message}`, 502);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function generateInsight({ scope, region, regionSnapshot, refReportId, pointSnapshot, noCache = false }) {
   const body = scope === 'region'
     ? {
@@ -61,4 +85,12 @@ export async function checkLlmHealth() {
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function clearLlmRecords() {
+  return deleteJson(
+    `${config.llm.baseUrl}/api/v1/insights/records`,
+    config.llm.timeoutMs,
+    'LLM'
+  );
 }

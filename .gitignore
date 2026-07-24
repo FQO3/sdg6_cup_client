@@ -8,6 +8,10 @@ client/.nuxt/
 client/.output/
 client/.data/
 client/dist/
+part3-analytics-platform/.nuxt/
+part3-analytics-platform/.output/
+part3-analytics-platform/.data/
+part3-analytics-platform/dist/
 .nitro/
 .cache/
 

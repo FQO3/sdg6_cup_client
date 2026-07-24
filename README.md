@@ -1,3 +1,4 @@
+[![OctoCounts](https://api.octocounts.com/badge/FQO3/sdg6_cup_client/branch/main)](https://octocounts.com/github/FQO3/sdg6_cup_client/tree/main)
 # SDG6 AquaCheck · Part 2（水杯端 + 客户端）
 
 三天 Hackathon 的 **水杯设计** 部分。四层架构：

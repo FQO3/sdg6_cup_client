@@ -36,7 +36,7 @@
         <div id="amap" class="amap-canvas">
           <div v-if="!amapReady" class="fallback-map">
             <svg class="fallback-polygons" viewBox="0 0 100 100" preserveAspectRatio="none">
-              <polygon v-for="c in clusterPolygons" :key="c.cluster_uuid" :points="fallbackPolygonPoints(c)" :fill="`${c.color}18`" :stroke="c.color" stroke-width="0.55" stroke-linejoin="round" />
+              <polygon v-for="c in clusterPolygons" :key="c.cluster_uuid" :points="fallbackPolygonPoints(c)" :fill="`${c.color}18`" :stroke="c.color" stroke-width="0.55" stroke-linejoin="round" @click.stop="selectCluster(c)" />
             </svg>
             <button v-for="m in markers.slice(0, 24)" :key="m.report_id" class="fallback-dot" :style="dotStyle(m)" @click.stop="selectMapPoint(m)" :aria-label="`查看 ${pointPlaceLabel(m)} 点位信息`"></button>
           </div>
@@ -60,6 +60,23 @@
             </div>
             <button class="ghost-btn point-report-btn" @click="createPointInsight(selectedMapPoint.report_id)" :disabled="insightLoading">
               {{ insightLoading ? 'LLM 报告生成中…' : '生成该点 LLM 报告' }}
+            </button>
+          </div>
+          <div v-if="selectedCluster" class="point-popover cluster-popover" :style="{ '--point-color': selectedCluster.color || '#68e1d0' }" @click.stop>
+            <div class="point-popover-head">
+              <div>
+                <p class="eyebrow">Selected Cluster</p>
+                <h3>{{ selectedCluster.label }}</h3>
+              </div>
+              <button class="popover-close" @click="selectedCluster = null" aria-label="关闭聚类信息">×</button>
+            </div>
+            <dl class="point-detail-list">
+              <div><dt>类型</dt><dd>{{ selectedCluster.cluster_type === 'geo' ? '地理聚类' : '水质聚类' }} · {{ selectedCluster.count }} samples</dd></div>
+              <div><dt>位置</dt><dd>{{ locationLabel(selectedCluster) }}</dd></div>
+              <div><dt>等级</dt><dd>平均 {{ fixed(selectedCluster.summary?.avg_grade_index) }} · {{ selectedCluster.summary?.dominant_grade || '—' }}</dd></div>
+            </dl>
+            <button class="ghost-btn point-report-btn" @click="createClusterInsight(selectedCluster.cluster_uuid)" :disabled="insightLoading">
+              {{ insightLoading ? 'LLM 报告生成中…' : '生成该聚类 LLM 报告' }}
             </button>
           </div>
         </div>
@@ -90,7 +107,7 @@
         </div>
         <div v-if="geoClusters.length || waterClusters.length" class="cluster-list">
           <h3>地理 + 水质信息聚类结果</h3>
-          <article v-for="c in [...geoClusters, ...waterClusters]" :key="c.cluster_uuid" class="cluster-row" :style="{ '--c': c.color }">
+          <article v-for="c in [...geoClusters, ...waterClusters]" :key="c.cluster_uuid" class="cluster-row" :style="{ '--c': c.color }" @click="selectCluster(c)">
             <div>
               <b>{{ c.label }}</b>
               <span>{{ c.cluster_type === 'geo' ? '地图圈定地理相近点' : '按 TDS/EC/浊度/pH 相似分组' }} · {{ c.count }} samples</span>
@@ -151,6 +168,7 @@ const clusterRun = ref(null);
 const geoClusters = ref([]);
 const waterClusters = ref([]);
 const selectedMapPoint = ref(null);
+const selectedCluster = ref(null);
 const insightLoading = ref(false);
 const lstmLoading = ref(false);
 const clusterLoading = ref(false);
@@ -183,6 +201,12 @@ function metricValue(point, field) {
 
 function selectMapPoint(point) {
   selectedMapPoint.value = point;
+  selectedCluster.value = null;
+}
+
+function selectCluster(cluster) {
+  selectedCluster.value = cluster;
+  selectedMapPoint.value = null;
 }
 
 function dotStyle(m) {
@@ -341,6 +365,7 @@ function renderAmapMarkers() {
       zIndex: 7,
       extData: cluster
     }));
+  mapClusterOverlays.forEach((polygon) => polygon.on('click', () => selectCluster(polygon.getExtData())));
   map.add([...mapClusterOverlays, ...mapMarkers]);
 }
 
@@ -358,6 +383,16 @@ async function createPointInsight(reportId) {
   insightLoading.value = true;
   try {
     const res = await $fetch('/api/v1/insights/generate', { method: 'POST', body: { scope: 'point', ref_report_id: reportId } });
+    latestInsight.value = res.data;
+  } finally {
+    insightLoading.value = false;
+  }
+}
+
+async function createClusterInsight(clusterUuid) {
+  insightLoading.value = true;
+  try {
+    const res = await $fetch('/api/v1/insights/generate', { method: 'POST', body: { scope: 'cluster', cluster_uuid: clusterUuid } });
     latestInsight.value = res.data;
   } finally {
     insightLoading.value = false;
@@ -440,6 +475,7 @@ button:disabled { opacity: .55; cursor: wait; }
 .amap-canvas { height: 520px; border-radius: 24px; overflow: hidden; background: linear-gradient(145deg, #10221e, #030807); position: relative; border: 1px solid rgba(104,225,208,.16); }
 .fallback-map { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(104,225,208,.08) 1px, transparent 1px), linear-gradient(rgba(104,225,208,.08) 1px, transparent 1px); background-size: 64px 64px; }
 .fallback-polygons { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; filter: drop-shadow(0 0 14px rgba(104,225,208,.18)); }
+.fallback-polygons polygon { pointer-events: auto; cursor: pointer; }
 .fallback-dot { position: absolute; width: 15px; height: 15px; border: 0; padding: 0; color: inherit; border-radius: 50%; box-shadow: 0 0 0 6px rgba(255,255,255,.08), 0 0 28px currentColor; transform: translate(-50%, -50%); }
 .fallback-dot:hover { box-shadow: 0 0 0 8px rgba(104,225,208,.16), 0 0 34px currentColor; }
 .point-popover { position: absolute; right: 18px; top: 18px; z-index: 30; width: min(360px, calc(100% - 36px)); border: 1px solid color-mix(in srgb, var(--point-color), transparent 38%); border-radius: 22px; padding: 16px; background: linear-gradient(180deg, rgba(4,10,9,.94), rgba(13,24,21,.88)); box-shadow: 0 22px 70px rgba(0,0,0,.46), 0 0 0 1px rgba(245,239,217,.08), inset 4px 0 0 var(--point-color); backdrop-filter: blur(18px); }
@@ -465,7 +501,8 @@ button:disabled { opacity: .55; cursor: wait; }
 .cluster-list h3 { margin: 2px 0 0; color: var(--cyan); font: 20px 'Bebas Neue', sans-serif; letter-spacing: .06em; }
 .district-row, .report-item, .job-card, .cluster-row { border: 1px solid rgba(245,239,217,.11); border-radius: 18px; background: rgba(3,8,7,.32); padding: 13px; }
 .district-row { display: grid; grid-template-columns: 1fr 90px 42px; align-items: center; gap: 12px; }
-.cluster-row { display: grid; grid-template-columns: 1fr 42px; align-items: center; gap: 12px; border-color: color-mix(in srgb, var(--c), transparent 68%); box-shadow: inset 4px 0 0 var(--c); }
+.cluster-row { display: grid; grid-template-columns: 1fr 42px; align-items: center; gap: 12px; border-color: color-mix(in srgb, var(--c), transparent 68%); box-shadow: inset 4px 0 0 var(--c); cursor: pointer; }
+.cluster-row:hover { background: color-mix(in srgb, var(--c), transparent 92%); }
 .district-row b, .report-item b, .cluster-row b { display: block; color: var(--ink); }
 .district-row span, .cluster-row span, .cluster-row small { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
 .cluster-row strong { color: var(--c); }

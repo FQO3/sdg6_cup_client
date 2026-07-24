@@ -45,13 +45,34 @@ class PointSnapshot(BaseModel):
     stability_note: Optional[str] = None  # 稳定性诊断
 
 
+class ClusterSnapshot(BaseModel):
+    """聚类区域快照(scope=cluster)。"""
+    cluster_uuid: str
+    run_uuid: Optional[str] = None
+    cluster_type: Optional[str] = None
+    label: Optional[str] = None
+    count: int = 0
+    location: Optional[dict] = None
+    center: dict = Field(default_factory=dict)
+    radius_m: Optional[float] = None
+    avg_grade_index: Optional[float] = None
+    dominant_grade: Optional[str] = None
+    pass_rate: Optional[str] = None
+    polluted_count: int = 0
+    grade_distribution: dict = Field(default_factory=dict)
+    water_type_distribution: dict = Field(default_factory=dict)
+    representative_reports: list[dict] = Field(default_factory=list)
+
+
 class GenerateRequest(BaseModel):
-    scope: Literal["region", "point"] = "region"
+    scope: Literal["region", "point", "cluster"] = "region"
     region: Optional[str] = Field(None, description="区域名, 如 '武汉市青山区'")
     ref_report_id: Optional[str] = Field(None, description="scope=point 时引用的检测记录 id")
+    cluster_uuid: Optional[str] = Field(None, description="scope=cluster 时引用的聚类 id")
     # 实战模式: 由调用方聚合后传入; scope=region 用 region_snapshot, scope=point 用 point_snapshot
     region_snapshot: Optional[RegionSnapshot] = None
     point_snapshot: Optional[PointSnapshot] = None
+    cluster_snapshot: Optional[ClusterSnapshot] = None
     no_cache: bool = Field(False, description="为 true 时跳过缓存, 强制重新生成")
 
 

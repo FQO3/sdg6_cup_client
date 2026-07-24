@@ -97,6 +97,72 @@ export function buildPointSnapshot(reportId) {
   };
 }
 
+export function buildClusterSnapshot(clusterUuid) {
+  const cluster = db.prepare('SELECT * FROM water_quality_clusters WHERE cluster_uuid = ?').get(clusterUuid);
+  if (!cluster) throw new ApiError(1003, 'cluster not found', 404);
+
+  const members = db.prepare(`
+    SELECT r.report_id, r.city, r.district, r.address, r.water_type,
+      r.tds, r.ph, r.temperature, r.turbidity, r.ec, r.grade, r.grade_index, r.measured_at
+    FROM water_quality_cluster_members m
+    JOIN reports r ON r.report_id = m.report_id
+    WHERE m.cluster_uuid = ?
+    ORDER BY m.distance ASC, datetime(r.measured_at) DESC
+  `).all(clusterUuid);
+
+  const summary = safeJsonParse(cluster.summary_json, {});
+  const location = safeJsonParse(cluster.location_json, null);
+  const gradeCounts = members.reduce((acc, row) => {
+    const grade = row.grade || 'unknown';
+    acc[grade] = (acc[grade] || 0) + 1;
+    return acc;
+  }, {});
+  const waterTypeCounts = members.reduce((acc, row) => {
+    const type = row.water_type || 'unknown';
+    acc[type] = (acc[type] || 0) + 1;
+    return acc;
+  }, {});
+  const passCount = members.filter((row) => Number(row.grade_index) <= 3).length;
+  const pollutedCount = members.filter((row) => Number(row.grade_index) >= 4).length;
+
+  return {
+    cluster_uuid: cluster.cluster_uuid,
+    run_uuid: cluster.run_uuid,
+    cluster_type: cluster.cluster_type,
+    label: cluster.label,
+    count: cluster.count,
+    location,
+    center: {
+      lat: cluster.center_lat,
+      lng: cluster.center_lng,
+      tds: cluster.center_tds,
+      ph: cluster.center_ph,
+      turbidity: cluster.center_turbidity,
+      ec: cluster.center_ec
+    },
+    radius_m: cluster.radius_m,
+    avg_grade_index: summary.avg_grade_index ?? null,
+    dominant_grade: summary.dominant_grade ?? null,
+    pass_rate: members.length ? `${((passCount / members.length) * 100).toFixed(1)}%` : null,
+    polluted_count: pollutedCount,
+    grade_distribution: gradeCounts,
+    water_type_distribution: waterTypeCounts,
+    representative_reports: members.slice(0, 8).map((row) => ({
+      report_id: row.report_id,
+      district: row.district,
+      address: row.address,
+      water_type: row.water_type,
+      grade: row.grade,
+      grade_index: row.grade_index,
+      ph: row.ph,
+      tds: row.tds,
+      turbidity: row.turbidity,
+      ec: row.ec,
+      measured_at: row.measured_at
+    }))
+  };
+}
+
 export function jobRow(row) {
   return row ? {
     job_id: row.job_id,

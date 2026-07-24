@@ -51,7 +51,7 @@ async function deleteJson(url, timeoutMs, serviceName) {
   }
 }
 
-export async function generateInsight({ scope, region, regionSnapshot, refReportId, pointSnapshot, noCache = false }) {
+export async function generateInsight({ scope, region, regionSnapshot, refReportId, pointSnapshot, clusterUuid, clusterSnapshot, noCache = false }) {
   const body = scope === 'region'
     ? {
         scope: 'region',
@@ -59,10 +59,17 @@ export async function generateInsight({ scope, region, regionSnapshot, refReport
         region_snapshot: regionSnapshot,
         no_cache: Boolean(noCache)
       }
-    : {
+    : scope === 'point'
+      ? {
         scope: 'point',
         ref_report_id: refReportId,
         point_snapshot: pointSnapshot,
+        no_cache: Boolean(noCache)
+      }
+      : {
+        scope: 'cluster',
+        cluster_uuid: clusterUuid,
+        cluster_snapshot: clusterSnapshot,
         no_cache: Boolean(noCache)
       };
 

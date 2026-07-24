@@ -26,6 +26,7 @@ from llm_client import (
     LLMError,
     generate_region_proposal,
     generate_point_proposal,
+    generate_cluster_proposal,
 )
 from store import (
     init_db,
@@ -63,17 +64,23 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
             raise HTTPException(status_code=422, detail="scope=region 需提供 region")
         if req.region_snapshot is None:
             raise HTTPException(status_code=422, detail="scope=region 需提供 region_snapshot")
-    else:  # point
+    elif req.scope == "point":
         if not req.ref_report_id:
             raise HTTPException(status_code=422, detail="scope=point 需提供 ref_report_id")
         if req.point_snapshot is None:
             raise HTTPException(status_code=422, detail="scope=point 需提供 point_snapshot")
+    else:  # cluster
+        if not req.cluster_uuid:
+            raise HTTPException(status_code=422, detail="scope=cluster 需提供 cluster_uuid")
+        if req.cluster_snapshot is None:
+            raise HTTPException(status_code=422, detail="scope=cluster 需提供 cluster_snapshot")
 
     region_key = req.region or ""
+    cache_ref = req.ref_report_id or req.cluster_uuid
 
     # 1. 查缓存(命中未过期则直接返回历史记录)
     if not req.no_cache:
-        cached = get_cached(req.scope, region_key, req.ref_report_id)
+        cached = get_cached(req.scope, region_key, cache_ref)
         if cached is not None:
             return GenerateResponse(
                 id=cached["id"],
@@ -91,16 +98,21 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
             content = await generate_region_proposal(snap)  # type: ignore[arg-type]
             summary = snap.model_dump()  # type: ignore[union-attr]
             region_out = region_key
-        else:
+        elif req.scope == "point":
             snap = req.point_snapshot
             content = await generate_point_proposal(snap)  # type: ignore[arg-type]
             summary = snap.model_dump()  # type: ignore[union-attr]
             region_out = req.region or (req.ref_report_id or "")
+        else:
+            snap = req.cluster_snapshot
+            content = await generate_cluster_proposal(snap)  # type: ignore[arg-type]
+            summary = snap.model_dump()  # type: ignore[union-attr]
+            region_out = req.region or (req.cluster_uuid or "")
     except LLMError as e:
         raise HTTPException(status_code=502, detail=f"提案生成失败: {e}") from e
 
     # 3. 落库(输入+响应)
-    rec_id = save_generation(req.scope, region_key, req.ref_report_id,
+    rec_id = save_generation(req.scope, region_key, cache_ref,
                              content, settings.model, summary)
 
     return GenerateResponse(

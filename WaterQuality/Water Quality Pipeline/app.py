@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 api.py —— FastAPI 水质等级预测接口
-启动: python3 -m uvicorn api:app --app-dir . --host 0.0.0.0 --port 8080
+启动: python3 -m uvicorn app:app --app-dir . --host 0.0.0.0 --port 8080
 
 接口:
   POST /predict         发送 4 个便宜参数 → 等级 + 置信度 + 各类概率

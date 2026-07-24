@@ -51,7 +51,7 @@ python train.save.py
 ## 第二步：启动 API 服务
 
 ```bash
-python -m uvicorn api:app --app-dir ./Water\ Quality\ Pipeline --host 0.0.0.0 --port 8080
+python -m uvicorn app:app --app-dir ./Water\ Quality\ Pipeline --host 0.0.0.0 --port 8080
 ```
 
 浏览器打开 `http://localhost:8080/docs` 可查看 Swagger 交互文档，直接在网页里测试。

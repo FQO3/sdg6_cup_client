@@ -4,26 +4,19 @@
  * 板子：Realtek Ameba BW16 (RTL8720DN)。使用 Ameba Arduino BLE API，
  *       与 ESP32 版 (cup_ble.ino) 采用不同的 BLE 库，但对外 GATT 契约完全一致。
  *
- * API 来源：ambiot/ambd_arduino 官方 BLEUartService 示例 + BLE 库头文件，
- *   已核对以下标识符真实存在：
- *     BLEService / BLECharacteristic / BLEAdvertData / BLEUUID
- *     setNotifyProperty(bool) · setCCCDCallback(cb) · setBufferLen(len)
- *     setData(uint8_t*, len) · writeString(String) · notify(conn_id)
- *     BLE.init() · configAdvert()->setAdvData()/setScanRspData()
- *     BLE.configServer(n) · BLE.addService() · BLE.beginPeripheral()
- *     BLE.connected(conn_id) · GATT_CLIENT_CHAR_CONFIG_NOTIFY
- *
  * GATT（严格对齐 API_DESIGN.md Part A / client useBle.ts，与 ESP32 版相同）:
  *   Service           UUID 0xFFE0
  *   Measurement Char  UUID 0xFFE1   Notify   ← 每采样周期主动推送
  * 载荷格式：JSON 文本（与 useBle.parseMeasurement 一致）
- *   {"tds":320,"ph":7.2,"temperature":24.5,"turbidity":1.3,"ec":640}
+ *   {"tds":320,"ph":7.2,"temperature":24.5,"turbidity":1.3,"ec":640,"wet":true}
  *
- * 依赖：Ameba Arduino 板管理包（安装后自带 BLEDevice.h 等 Ameba BLE 库）
- *   Arduino IDE → 首选项 → 附加开发板管理器网址：
- *     https://github.com/ambiot/ambd_arduino/raw/master/Arduino_package/package_realtek.com_amebad_index.json
- *   开发板选择：AmebaD ARM (32-bits) Boards → BW16 (RTL8720DN)
- * TODO：接入真实传感器读数替换 readSensors() 的模拟值
+ * 真实传感器接入：
+ *   pH        → PH_ADC_PIN        默认 A0
+ *   TDS/EC    → TDS_ADC_PIN       默认 A1
+ *   Turbidity → TURBIDITY_ADC_PIN 默认 A2
+ *
+ * 重要：BW16/RTL8720DN ADC 输入范围按 0~3.3V 处理。若传感器模块 5V 供电且 AO 可能超过
+ *       3.3V，必须先用电阻分压再进入 ADC，不能直接接入；也不能接 PWM/数字输出脚。
  */
 
 #include "BLEDevice.h"
@@ -46,9 +39,52 @@ uint32_t lastSample = 0;
 
 int luminance = 255;
 
+// ─────────────────────────────
+// 引脚配置：全部必须接 BW16 的 ADC/Analog 输入脚
+// 若你实物板丝印/variant 中 A0/A1/A2 不可用，请把下面三个宏替换成实际 ADC 引脚名。
+// 已知常见 BW16/Rtlduino variant 中 A2 对应 PB3，可作为 ADC 输入。
+// ─────────────────────────────
+#define PH_ADC_PIN        A0
+#define TDS_ADC_PIN       A1
+#define TURBIDITY_ADC_PIN A2
+
 // 水位检测：两根导线导通 = 高电平 → wet=true（水杯已浸没）
 #define WATER_LEVEL_PIN PA27
 
+// ─────────────────────────────
+// ADC 与分压配置
+// Ameba/BW16 按 0~3.3V ADC 输入设计；Arduino analogRead 通常返回 0~1023。
+// 若你的板包返回其他范围，只需要改 ADC_MAX_VALUE。
+// ─────────────────────────────
+const float ADC_REF_VOLTAGE = 3.3;
+const float ADC_MAX_VALUE = 1023.0;
+const int ADC_SAMPLE_COUNT = 21;   // 奇数，便于中值滤波；3 路 * 21 次约可稳定在 700ms 周期内
+const int ADC_SAMPLE_DELAY_MS = 4;
+
+// 分压还原系数：sensor_output_voltage = adc_pin_voltage * DIVIDER_RATIO
+// 例：5V 模块 AO 经 10k(上拉到传感器AO) + 20k(下拉GND) 分压进入 ADC，比例为 2/3，
+//     则 DIVIDER_RATIO = (10k + 20k) / 20k = 1.5。
+// 若模块 3.3V 供电且 AO 不超过 3.3V，可保持 1.0。
+const float PH_DIVIDER_RATIO = 1.0;
+const float TDS_DIVIDER_RATIO = 1.0;
+const float TURBIDITY_DIVIDER_RATIO = 1.0;
+
+// ─────────────────────────────
+// 传感器标定参数：来自 firmware/参考程序，并保留现场快速校准入口
+// ─────────────────────────────
+const float DEFAULT_TEMPERATURE_C = 25.0;  // 当前没有独立温度探头，先用 25℃ 做补偿基准
+
+// pH：参考程序中“pH 7.3 时 PO=2.46V”，斜率约 0.18V/pH，电压越低 pH 越高
+const float PH_CAL = 7.30;
+const float PH_V_CAL = 2.460;
+const float PH_SLOPE = 0.180;
+
+// 浊度：参考程序公式，输出单位 NTU，范围限制 0~3000
+const float TURBIDITY_K_VALUE = 3347.19;
+
+// TDS 与 EC：参考程序使用 DFRobot 类 TDS 多项式，EC 单位 µS/cm。
+// TDS 常用近似：tds(ppm) = ec(µS/cm) * 0.5；现场可按探头说明改为 0.5~0.7。
+const float TDS_FACTOR = 0.5;
 
 // CCCD 回调：central 写入 0x2902 时触发，判断是否开启了 Notify
 void measureCCCDCallback(BLECharacteristic* chr, uint8_t connID, uint16_t cccd) {
@@ -59,24 +95,93 @@ void measureCCCDCallback(BLECharacteristic* chr, uint8_t connID, uint16_t cccd) 
   Serial.println(notifyEnabled ? "enabled" : "disabled");
 }
 
-// TODO: 替换为真实传感器采集 + 标定换算
-// struct SensorSample { float tds, ph, temperature, turbidity, ec; };c:\Users\MxzfTn2N8Anx\Desktop\北A\sdg6_cup_client\firmware\cup_ble_bw16\SensorSample.h
+float clampFloat(float value, float minValue, float maxValue) {
+  if (value < minValue) return minValue;
+  if (value > maxValue) return maxValue;
+  return value;
+}
+
+int readMedianAdc(int pin) {
+  int values[ADC_SAMPLE_COUNT];
+
+  for (int i = 0; i < ADC_SAMPLE_COUNT; i++) {
+    values[i] = analogRead(pin);
+    delay(ADC_SAMPLE_DELAY_MS);
+  }
+
+  for (int j = 0; j < ADC_SAMPLE_COUNT - 1; j++) {
+    for (int i = 0; i < ADC_SAMPLE_COUNT - j - 1; i++) {
+      if (values[i] > values[i + 1]) {
+        int tmp = values[i];
+        values[i] = values[i + 1];
+        values[i + 1] = tmp;
+      }
+    }
+  }
+
+  return values[ADC_SAMPLE_COUNT / 2];
+}
+
+float readAdcPinVoltage(int pin) {
+  int raw = readMedianAdc(pin);
+  raw = clampFloat(raw, 0, ADC_MAX_VALUE);
+  return raw * ADC_REF_VOLTAGE / ADC_MAX_VALUE;
+}
+
+float readSensorOutputVoltage(int pin, float dividerRatio) {
+  return readAdcPinVoltage(pin) * dividerRatio;
+}
+
+float calcPh(float voltage) {
+  // 电压低：更碱，pH 更高；电压高：更酸，pH 更低
+  float ph = PH_CAL + (PH_V_CAL - voltage) / PH_SLOPE;
+  return clampFloat(ph, 0.0, 14.0);
+}
+
+float calcEc(float voltage, float temperatureC) {
+  // 温度补偿至 25℃
+  float compensationCoefficient = 1.0 + 0.02 * (temperatureC - 25.0);
+  float compensationVoltage = voltage / compensationCoefficient;
+
+  // EC 换算，单位：µS/cm
+  float ec = 133.42 * compensationVoltage * compensationVoltage * compensationVoltage
+           - 255.86 * compensationVoltage * compensationVoltage
+           + 857.39 * compensationVoltage;
+
+  return clampFloat(ec, 0.0, 5000.0);
+}
+
+float calcTurbidity(float voltage, float temperatureC) {
+  float calibratedVoltage = -0.0192 * (temperatureC - 25.0) + voltage;
+  float ntu = -865.68 * calibratedVoltage + TURBIDITY_K_VALUE;
+  return clampFloat(ntu, 0.0, 3000.0);
+}
 
 SensorSample readSensors() {
-  // 示例模拟值；实际接 TDS/pH/温度/浊度模块的 ADC 读数并换算
   SensorSample m;
-  // m.tds = 100 + random(0, 500);
-  // m.ph = 6.5 + random(0, 200) / 100.0;
-  // m.temperature = 18 + random(0, 120) / 10.0;
-  // m.turbidity = random(0, 600) / 100.0;
-  // m.ec = 200 + random(0, 1000);
-  m.tds = 200;
-  m.ph = 7.2;
-  m.temperature = 20;
-  m.turbidity = 200;
-  m.ec = 400;
+
+  float temperatureC = DEFAULT_TEMPERATURE_C;
+  float phVoltage = readSensorOutputVoltage(PH_ADC_PIN, PH_DIVIDER_RATIO);
+  float tdsVoltage = readSensorOutputVoltage(TDS_ADC_PIN, TDS_DIVIDER_RATIO);
+  float turbidityVoltage = readSensorOutputVoltage(TURBIDITY_ADC_PIN, TURBIDITY_DIVIDER_RATIO);
+
+  m.temperature = temperatureC;
+  m.ph = calcPh(phVoltage);
+  m.ec = calcEc(tdsVoltage, temperatureC);
+  m.tds = m.ec * TDS_FACTOR;
+  m.turbidity = calcTurbidity(turbidityVoltage, temperatureC);
+
   // 水位检测：两根导线导通=高电平 → 水杯已浸没
   m.wet = (digitalRead(WATER_LEVEL_PIN) == HIGH);
+
+  Serial.print("ADC voltage | pH=");
+  Serial.print(phVoltage, 3);
+  Serial.print("V TDS=");
+  Serial.print(tdsVoltage, 3);
+  Serial.print("V Turbidity=");
+  Serial.print(turbidityVoltage, 3);
+  Serial.println("V");
+
   return m;
 }
 
@@ -88,18 +193,22 @@ String toJson(const SensorSample& m) {
   return String(buf);
 }
 
-
 void setup() {
   pinMode(LED_R, OUTPUT);
   pinMode(LED_G, OUTPUT);
   pinMode(LED_B, OUTPUT);
-  led(255,0,0);
+  led(255, 0, 0);
+
+  pinMode(PH_ADC_PIN, INPUT);
+  pinMode(TDS_ADC_PIN, INPUT);
+  pinMode(TURBIDITY_ADC_PIN, INPUT);
 
   // 水位检测引脚：外部下拉，导通时被拉高 → HIGH=浸没
   pinMode(WATER_LEVEL_PIN, INPUT);
 
-
   Serial.begin(115200);
+  Serial.println("AquaCup BW16 booting with real ADC sensors");
+
   // 广播：Flags + 设备名放主广播；服务 UUID 放扫描响应，避免 31 字节溢出
   advData.addFlags(GAP_ADTYPE_FLAGS_LIMITED | GAP_ADTYPE_FLAGS_BREDR_NOT_SUPPORTED);
   advData.addCompleteName("AquaCup-01");
@@ -119,15 +228,16 @@ void setup() {
   BLE.addService(measureService);
 
   BLE.beginPeripheral();
-  led(0,255,0);
+  led(0, 255, 0);
   Serial.println("BLE advertising as AquaCup-01");
   delay(200);
 }
 
 void loop() {
   led(255, 255, 255);
-    // conn_id 0 为首个连接；断开后 Ameba 会自动恢复广播
-    if (BLE.connected(0) && notifyEnabled && millis() - lastSample >= SAMPLE_INTERVAL_MS) {
+
+  // conn_id 0 为首个连接；断开后 Ameba 会自动恢复广播
+  if (BLE.connected(0) && notifyEnabled && millis() - lastSample >= SAMPLE_INTERVAL_MS) {
     lastSample = millis();
     String payload = toJson(readSensors());
     measureChar.writeString(payload);  // 写入特征值缓冲

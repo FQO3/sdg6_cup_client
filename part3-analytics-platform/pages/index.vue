@@ -38,7 +38,29 @@
             <svg class="fallback-polygons" viewBox="0 0 100 100" preserveAspectRatio="none">
               <polygon v-for="c in clusterPolygons" :key="c.cluster_uuid" :points="fallbackPolygonPoints(c)" :fill="`${c.color}18`" :stroke="c.color" stroke-width="0.55" stroke-linejoin="round" />
             </svg>
-            <span v-for="m in markers.slice(0, 24)" :key="m.report_id" class="fallback-dot" :style="dotStyle(m)"></span>
+            <button v-for="m in markers.slice(0, 24)" :key="m.report_id" class="fallback-dot" :style="dotStyle(m)" @click.stop="selectMapPoint(m)" :aria-label="`查看 ${pointPlaceLabel(m)} 点位信息`"></button>
+          </div>
+          <div v-if="selectedMapPoint" class="point-popover" :style="{ '--point-color': selectedMapPoint.color || '#68e1d0' }" @click.stop>
+            <div class="point-popover-head">
+              <div>
+                <p class="eyebrow">Selected Sample Point</p>
+                <h3>{{ pointPlaceLabel(selectedMapPoint) }}</h3>
+              </div>
+              <button class="popover-close" @click="selectedMapPoint = null" aria-label="关闭点位信息">×</button>
+            </div>
+            <dl class="point-detail-list">
+              <div><dt>经纬度</dt><dd>{{ fixed(selectedMapPoint.lat) }}, {{ fixed(selectedMapPoint.lng) }}</dd></div>
+              <div><dt>实际地点</dt><dd>{{ pointAddressLabel(selectedMapPoint) }}</dd></div>
+            </dl>
+            <div class="point-metrics">
+              <span><b>TDS</b>{{ metricValue(selectedMapPoint, 'tds') }}</span>
+              <span><b>EC</b>{{ metricValue(selectedMapPoint, 'ec') }}</span>
+              <span><b>TBD</b>{{ metricValue(selectedMapPoint, 'turbidity') }}</span>
+              <span><b>PH</b>{{ metricValue(selectedMapPoint, 'ph') }}</span>
+            </div>
+            <button class="ghost-btn point-report-btn" @click="createPointInsight(selectedMapPoint.report_id)" :disabled="insightLoading">
+              {{ insightLoading ? 'LLM 报告生成中…' : '生成该点 LLM 报告' }}
+            </button>
           </div>
         </div>
         <div class="map-legend">
@@ -123,6 +145,7 @@ const latestJob = ref(null);
 const clusterRun = ref(null);
 const geoClusters = ref([]);
 const waterClusters = ref([]);
+const selectedMapPoint = ref(null);
 const insightLoading = ref(false);
 const lstmLoading = ref(false);
 const clusterLoading = ref(false);
@@ -138,6 +161,23 @@ const waterLabel = (type) => waterNames[type] || type;
 const percent = (v) => typeof v === 'number' ? `${Math.round(v * 100)}%` : '—';
 const fixed = (v) => typeof v === 'number' ? v.toFixed(2) : '—';
 const shortTime = (t) => t ? new Date(t).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+
+function pointPlaceLabel(point) {
+  return point?.district || point?.city || point?.address || '未知点位';
+}
+
+function pointAddressLabel(point) {
+  return point?.address || [point?.city, point?.district].filter(Boolean).join(' · ') || '暂无地址信息';
+}
+
+function metricValue(point, field) {
+  const value = point?.metrics?.[field];
+  return typeof value === 'number' ? value.toFixed(field === 'ph' ? 2 : 1) : '—';
+}
+
+function selectMapPoint(point) {
+  selectedMapPoint.value = point;
+}
 
 function dotStyle(m) {
   const lng = Number(m.lng || 116.4);
@@ -282,7 +322,7 @@ function renderAmapMarkers() {
     cursor: 'pointer',
     extData: m
   }));
-  mapMarkers.forEach((mk) => mk.on('click', () => createPointInsight(mk.getExtData().report_id)));
+  mapMarkers.forEach((mk) => mk.on('click', () => selectMapPoint(mk.getExtData())));
   mapClusterOverlays = geoClusters.value
     .map((cluster) => new window.AMap.Polygon({
       path: polygonPath(cluster),
@@ -381,7 +421,21 @@ button:disabled { opacity: .55; cursor: wait; }
 .amap-canvas { height: 520px; border-radius: 24px; overflow: hidden; background: linear-gradient(145deg, #10221e, #030807); position: relative; border: 1px solid rgba(104,225,208,.16); }
 .fallback-map { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(104,225,208,.08) 1px, transparent 1px), linear-gradient(rgba(104,225,208,.08) 1px, transparent 1px); background-size: 64px 64px; }
 .fallback-polygons { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; filter: drop-shadow(0 0 14px rgba(104,225,208,.18)); }
-.fallback-dot { position: absolute; width: 15px; height: 15px; border-radius: 50%; box-shadow: 0 0 0 6px rgba(255,255,255,.08), 0 0 28px currentColor; transform: translate(-50%, -50%); }
+.fallback-dot { position: absolute; width: 15px; height: 15px; border: 0; padding: 0; color: inherit; border-radius: 50%; box-shadow: 0 0 0 6px rgba(255,255,255,.08), 0 0 28px currentColor; transform: translate(-50%, -50%); }
+.fallback-dot:hover { box-shadow: 0 0 0 8px rgba(104,225,208,.16), 0 0 34px currentColor; }
+.point-popover { position: absolute; right: 18px; top: 18px; z-index: 30; width: min(360px, calc(100% - 36px)); border: 1px solid color-mix(in srgb, var(--point-color), transparent 38%); border-radius: 22px; padding: 16px; background: linear-gradient(180deg, rgba(4,10,9,.94), rgba(13,24,21,.88)); box-shadow: 0 22px 70px rgba(0,0,0,.46), 0 0 0 1px rgba(245,239,217,.08), inset 4px 0 0 var(--point-color); backdrop-filter: blur(18px); }
+.point-popover-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+.point-popover h3 { margin: 0; color: var(--ink); font: 28px/1 'Bebas Neue', sans-serif; letter-spacing: .04em; }
+.popover-close { width: 30px; height: 30px; border: 1px solid rgba(245,239,217,.18); border-radius: 50%; color: var(--ink); background: rgba(245,239,217,.06); font-size: 20px; line-height: 1; }
+.popover-close:hover { color: var(--cyan); border-color: rgba(104,225,208,.45); }
+.point-detail-list { display: grid; gap: 9px; margin: 0 0 12px; }
+.point-detail-list div { display: grid; grid-template-columns: 70px 1fr; gap: 10px; align-items: start; }
+.point-detail-list dt { color: var(--muted); font-size: 12px; }
+.point-detail-list dd { margin: 0; color: #e9e2c7; font-size: 13px; line-height: 1.45; }
+.point-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 13px; }
+.point-metrics span { border: 1px solid rgba(245,239,217,.11); border-radius: 14px; padding: 9px 7px; background: rgba(245,239,217,.05); color: var(--ink); text-align: center; font: 18px/.95 'Bebas Neue', sans-serif; letter-spacing: .03em; }
+.point-metrics b { display: block; margin-bottom: 5px; color: var(--point-color); font: 10px/1 'Noto Serif SC', serif; letter-spacing: .12em; }
+.point-report-btn { width: 100%; color: var(--point-color); border-color: color-mix(in srgb, var(--point-color), transparent 52%); }
 .map-legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 13px; color: #cfc7ad; font-size: 13px; }
 .map-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .map-legend i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }

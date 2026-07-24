@@ -164,8 +164,9 @@
           <div v-else class="markdown-body" v-html="renderMarkdown(latestInsight.content)"></div>
         </div>
         <div v-if="latestJob" class="job-card">
-          <div><b>{{ latestJob.job_id }}</b><span>{{ latestJob.status }} · {{ latestJob.progress }}%</span></div>
-          <pre>{{ latestJob.result ? JSON.stringify(latestJob.result, null, 2) : latestJob.error_message || '等待 LSTM 服务返回时序分析结果…' }}</pre>
+          <div class="job-head"><b>{{ latestJob.job_id }}</b><span>{{ latestJob.status }} · {{ latestJob.progress }}%</span></div>
+          <div v-if="latestJobMarkdown" class="markdown-body" v-html="renderMarkdown(latestJobMarkdown)"></div>
+          <pre v-else>{{ latestJob.result ? JSON.stringify(latestJob.result, null, 2) : latestJob.error_message || '等待 LSTM 服务返回时序分析结果…' }}</pre>
         </div>
       </article>
     </section>
@@ -183,6 +184,7 @@ const latestInsight = ref(null);
 const latestJob = ref(null);
 const clusterRun = ref(null);
 const geoClusters = ref([]);
+const latestJobMarkdown = computed(() => extractMarkdown(latestJob.value?.result));
 const selectedMapPoint = ref(null);
 const selectedCluster = ref(null);
 const districtFoldOpen = ref(true);
@@ -317,6 +319,57 @@ function renderMarkdown(value) {
   flushParagraph();
   closeList();
   return html.join('');
+}
+
+function looksLikeMarkdown(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return false;
+  return /(^|\n)#{1,6}\s+\S/.test(text)
+    || /(^|\n)\s*[-*+]\s+\S/.test(text)
+    || /(^|\n)\s*\d+[.)]\s+\S/.test(text)
+    || /(^|\n)>\s+\S/.test(text)
+    || /```/.test(text)
+    || /\*\*[^*]+\*\*/.test(text);
+}
+
+function extractMarkdown(value) {
+  if (!value) return '';
+  if (typeof value === 'string') {
+    try {
+      return extractMarkdown(JSON.parse(value));
+    } catch {
+      return looksLikeMarkdown(value) ? value.trim() : '';
+    }
+  }
+
+  const direct = value.markdown
+    || value.content
+    || value.analysis_markdown
+    || value.report_markdown
+    || value.llm?.content
+    || value.llm?.markdown
+    || value.data?.markdown
+    || value.data?.content
+    || value.data?.llm?.content;
+
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = extractMarkdown(item);
+      if (found) return found;
+    }
+    return '';
+  }
+
+  if (typeof value === 'object') {
+    for (const item of Object.values(value)) {
+      const found = extractMarkdown(item);
+      if (found) return found;
+    }
+  }
+
+  return '';
 }
 
 function pointPlaceLabel(point) {
@@ -652,6 +705,7 @@ meter { width: 100%; accent-color: var(--amber); }
 .status-strip span { border: 1px solid rgba(104,225,208,.20); border-radius: 999px; padding: 7px 10px; color: var(--cyan); font-size: 12px; background: rgba(104,225,208,.06); }
 .markdown-card { min-height: 220px; border-radius: 20px; background: #f3ead0; color: #13211d; padding: 18px; overflow: auto; }
 .markdown-body { font-size: 14px; line-height: 1.75; }
+.job-card .markdown-body { border-radius: 16px; background: #f3ead0; color: #13211d; padding: 16px; overflow: auto; }
 .markdown-body :deep(h1), .markdown-body :deep(h2), .markdown-body :deep(h3), .markdown-body :deep(h4), .markdown-body :deep(h5), .markdown-body :deep(h6) { margin: 1.05em 0 .45em; color: #10211d; font-family: 'Noto Serif SC', serif; font-weight: 800; letter-spacing: 0; line-height: 1.25; }
 .markdown-body :deep(h1) { font-size: 24px; }
 .markdown-body :deep(h2) { font-size: 21px; border-bottom: 1px solid rgba(19,33,29,.15); padding-bottom: 6px; }
@@ -670,7 +724,7 @@ meter { width: 100%; accent-color: var(--amber); }
 .markdown-body :deep(*:last-child) { margin-bottom: 0; }
 pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.55; }
 .job-card { margin-top: 12px; }
-.job-card div { display: flex; justify-content: space-between; margin-bottom: 10px; color: var(--cyan); }
+.job-head { display: flex; justify-content: space-between; margin-bottom: 10px; color: var(--cyan); }
 .reveal { opacity: 0; transform: translateY(18px); animation: reveal .7s cubic-bezier(.2,.8,.2,1) forwards; animation-delay: var(--delay); }
 @keyframes reveal { to { opacity: 1; transform: none; } }
 @media (max-width: 1040px) { .hero, .command-grid, .lower-grid { grid-template-columns: 1fr; } .kpi-grid { grid-template-columns: repeat(2, 1fr); } }

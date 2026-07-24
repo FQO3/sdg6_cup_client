@@ -161,7 +161,7 @@
         </div>
         <div class="markdown-card">
           <p v-if="!latestInsight">点击“生成区域提案”后，我方 Nitro 会把聚合快照发给队友 LLM 服务，并缓存 Markdown 报告。</p>
-          <pre v-else>{{ latestInsight.content }}</pre>
+          <div v-else class="markdown-body" v-html="renderMarkdown(latestInsight.content)"></div>
         </div>
         <div v-if="latestJob" class="job-card">
           <div><b>{{ latestJob.job_id }}</b><span>{{ latestJob.status }} · {{ latestJob.progress }}%</span></div>
@@ -204,6 +204,120 @@ const waterLabel = (type) => waterNames[type] || type;
 const percent = (v) => typeof v === 'number' ? `${Math.round(v * 100)}%` : '—';
 const fixed = (v) => typeof v === 'number' ? v.toFixed(2) : '—';
 const shortTime = (t) => t ? new Date(t).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderInlineMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/_([^_]+)_/g, '<em>$1</em>');
+}
+
+function renderMarkdown(value) {
+  const lines = String(value ?? '').replace(/\r\n?/g, '\n').split('\n');
+  const html = [];
+  const paragraph = [];
+  let listType = '';
+  let codeBlock = false;
+  let codeLines = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    html.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
+    paragraph.length = 0;
+  };
+  const closeList = () => {
+    if (!listType) return;
+    html.push(`</${listType}>`);
+    listType = '';
+  };
+  const openList = (type) => {
+    if (listType === type) return;
+    closeList();
+    html.push(`<${type}>`);
+    listType = type;
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('```')) {
+      flushParagraph();
+      closeList();
+      if (codeBlock) {
+        html.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+        codeLines = [];
+      }
+      codeBlock = !codeBlock;
+      continue;
+    }
+    if (codeBlock) {
+      codeLines.push(line);
+      continue;
+    }
+    if (!trimmed) {
+      flushParagraph();
+      closeList();
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      closeList();
+      html.push(`<h${heading[1].length}>${renderInlineMarkdown(heading[2])}</h${heading[1].length}>`);
+      continue;
+    }
+
+    if (/^[-*_]{3,}$/.test(trimmed)) {
+      flushParagraph();
+      closeList();
+      html.push('<hr>');
+      continue;
+    }
+
+    const quote = trimmed.match(/^>\s?(.+)$/);
+    if (quote) {
+      flushParagraph();
+      closeList();
+      html.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`);
+      continue;
+    }
+
+    const unordered = trimmed.match(/^[-*+]\s+(.+)$/);
+    if (unordered) {
+      flushParagraph();
+      openList('ul');
+      html.push(`<li>${renderInlineMarkdown(unordered[1])}</li>`);
+      continue;
+    }
+
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (ordered) {
+      flushParagraph();
+      openList('ol');
+      html.push(`<li>${renderInlineMarkdown(ordered[1])}</li>`);
+      continue;
+    }
+
+    closeList();
+    paragraph.push(trimmed);
+  }
+
+  if (codeBlock) html.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+  flushParagraph();
+  closeList();
+  return html.join('');
+}
 
 function pointPlaceLabel(point) {
   return point?.district || point?.city || point?.address || '未知点位';
@@ -537,6 +651,23 @@ meter { width: 100%; accent-color: var(--amber); }
 .status-strip { display: flex; gap: 10px; margin-bottom: 12px; }
 .status-strip span { border: 1px solid rgba(104,225,208,.20); border-radius: 999px; padding: 7px 10px; color: var(--cyan); font-size: 12px; background: rgba(104,225,208,.06); }
 .markdown-card { min-height: 220px; border-radius: 20px; background: #f3ead0; color: #13211d; padding: 18px; overflow: auto; }
+.markdown-body { font-size: 14px; line-height: 1.75; }
+.markdown-body :deep(h1), .markdown-body :deep(h2), .markdown-body :deep(h3), .markdown-body :deep(h4), .markdown-body :deep(h5), .markdown-body :deep(h6) { margin: 1.05em 0 .45em; color: #10211d; font-family: 'Noto Serif SC', serif; font-weight: 800; letter-spacing: 0; line-height: 1.25; }
+.markdown-body :deep(h1) { font-size: 24px; }
+.markdown-body :deep(h2) { font-size: 21px; border-bottom: 1px solid rgba(19,33,29,.15); padding-bottom: 6px; }
+.markdown-body :deep(h3) { font-size: 18px; }
+.markdown-body :deep(p) { margin: 0 0 12px; }
+.markdown-body :deep(ul), .markdown-body :deep(ol) { margin: 0 0 13px; padding-left: 1.35em; }
+.markdown-body :deep(li) { margin: 5px 0; }
+.markdown-body :deep(strong) { color: #08110f; font-weight: 800; }
+.markdown-body :deep(em) { color: #526055; }
+.markdown-body :deep(blockquote) { margin: 0 0 13px; padding: 9px 12px; border-left: 4px solid #68b8aa; background: rgba(104,225,208,.12); border-radius: 10px; }
+.markdown-body :deep(code) { border-radius: 6px; padding: 2px 5px; background: rgba(19,33,29,.10); color: #0b5b50; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+.markdown-body :deep(pre) { margin: 0 0 13px; padding: 12px; border-radius: 12px; background: #13211d; color: #f3ead0; overflow: auto; }
+.markdown-body :deep(pre code) { padding: 0; background: transparent; color: inherit; }
+.markdown-body :deep(hr) { border: 0; border-top: 1px solid rgba(19,33,29,.16); margin: 16px 0; }
+.markdown-body :deep(*:first-child) { margin-top: 0; }
+.markdown-body :deep(*:last-child) { margin-bottom: 0; }
 pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.55; }
 .job-card { margin-top: 12px; }
 .job-card div { display: flex; justify-content: space-between; margin-bottom: 10px; color: var(--cyan); }

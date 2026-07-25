@@ -139,3 +139,6 @@ npm run dev                           # 监听 0.0.0.0:3000
 
 ## LSTM/LLM水质预测描述服务
 [跳转链接](/Services/LSTM/README.md)
+
+## 注意
+记得删除 `lockfile`!!!

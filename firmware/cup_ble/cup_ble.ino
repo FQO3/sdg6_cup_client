@@ -1,7 +1,8 @@
 /*
- * SDG6 AquaCheck · 水杯端 BLE 固件 (ESP32)
+ * SDG6 AquaCheck · 水杯端 BLE 固件 (ESP32-S3-MINI SMD)
  * ────────────────────────────────────────────────────────────
- * 主控：ESP32。三路模拟水质传感器直接接 ESP32 ADC1 引脚。
+ * 主控：ESP32-S3-MINI (SMD)。三路模拟水质传感器直接接 ESP32-S3 ADC1 引脚。
+ * 参考：https://wiki.diustou.com/cn/ESP32-S3-MINI_(SMD)
  *
  * GATT（严格对齐客户端 useBle.ts / 后续 report capture 逻辑）:
  *   Service           UUID 0xFFE0
@@ -9,14 +10,17 @@
  * 载荷格式：JSON 文本：
  *   {"tds":320,"ph":7.2,"temperature":25.0,"turbidity":1.3,"ec":640,"wet":true}
  *
- * 默认接线：
- *   pH        AO -> GPIO34 / ADC1_CH6
- *   TDS/EC    AO -> GPIO35 / ADC1_CH7
- *   Turbidity AO -> GPIO32 / ADC1_CH4
- *   水位检测      -> GPIO27，外部下拉，入水导通到 3.3V 时 wet=true
+ * 默认接线（ESP32-S3 ADC1 = GPIO1~GPIO10，避开 ADC2 与无线冲突）：
+ *   pH        AO -> GPIO4 / ADC1_CH3
+ *   TDS/EC    AO -> GPIO5 / ADC1_CH4
+ *   Turbidity AO -> GPIO6 / ADC1_CH5
+ *   水位检测      -> GPIO7，内部下拉，入水导通到 3.3V 时 wet=true
  *
- * 重要电压限制：ESP32 ADC 输入不要超过 3.3V。
- * 如果传感器模块 5V 供电且 AO 可能输出 5V，必须先分压再接 ESP32 ADC。
+ * 重要电压限制：ESP32-S3 ADC 输入不要超过 3.3V。
+ * 如果传感器模块 5V 供电且 AO 可能输出 5V，必须先分压再接 ESP32-S3 ADC。
+ *
+ * ADC 精度：ESP32-S3 Arduino analogRead 支持最高 13-bit（0~8191）。
+ * 本固件使用 13-bit 精度，量程 0~8191（旧 ESP32 为 12-bit / 0~4095）。
  */
 
 #include <BLEDevice.h>
@@ -34,16 +38,17 @@ const uint32_t SAMPLE_INTERVAL_MS = 700;
 uint32_t lastSample = 0;
 
 // ─────────────────────────────
-// ESP32 ADC 引脚：优先使用 ADC1，避免 ADC2 与无线功能冲突
+// ESP32-S3-MINI ADC 引脚：优先使用 ADC1（GPIO1~GPIO10），避免 ADC2 与 Wi-Fi/BLE 冲突
 // ─────────────────────────────
-const int PH_ADC_PIN = 34;         // ADC1_CH6，输入专用脚
-const int TDS_ADC_PIN = 35;        // ADC1_CH7，输入专用脚
-const int TURBIDITY_ADC_PIN = 32;  // ADC1_CH4
-const int WATER_LEVEL_PIN = 27;    // 数字输入，建议外部 10k 下拉
+const int PH_ADC_PIN = 4;          // ADC1_CH3
+const int TDS_ADC_PIN = 5;         // ADC1_CH4
+const int TURBIDITY_ADC_PIN = 6;   // ADC1_CH5
+const int WATER_LEVEL_PIN = 7;     // 数字输入，使用内部下拉
 
-// ESP32 Arduino 默认 12-bit ADC，即 0~4095
+// ESP32-S3 Arduino ADC 精度：13-bit，即 0~8191
+const int ADC_RESOLUTION_BITS = 13;
 const float ADC_REF_VOLTAGE = 3.3;
-const float ADC_MAX_VALUE = 4095.0;
+const float ADC_MAX_VALUE = 8191.0;
 const int ADC_SAMPLE_COUNT = 21;   // 奇数，中值滤波
 const int ADC_SAMPLE_DELAY_MS = 4;
 
@@ -191,7 +196,8 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
-  analogReadResolution(12);
+  // ESP32-S3 ADC1：13-bit 精度 + 12dB 衰减（满量程约 0~3.1V，可读到 3.3V 附近）
+  analogReadResolution(ADC_RESOLUTION_BITS);
   analogSetPinAttenuation(PH_ADC_PIN, ADC_11db);
   analogSetPinAttenuation(TDS_ADC_PIN, ADC_11db);
   analogSetPinAttenuation(TURBIDITY_ADC_PIN, ADC_11db);
@@ -217,7 +223,7 @@ void setup() {
   adv->setScanResponse(true);
   BLEDevice::startAdvertising();
 
-  Serial.println("AquaCup ESP32 booted with real ADC sensors");
+  Serial.println("AquaCup ESP32-S3-MINI booted with real ADC sensors (13-bit)");
   Serial.println("BLE advertising as AquaCup-01");
 }
 

@@ -47,7 +47,7 @@ const int WATER_LEVEL_PIN = 7;     // 数字输入，使用内部下拉
 // ESP32-S3 ADC1 精度：12-bit，即 0~4095
 const int ADC_RESOLUTION_BITS = 12;
 const float ADC_REF_VOLTAGE = 3.3;
-const float ADC_MAX_VALUE = 4095.0;
+const float ADC_MAX_VALUE = 8191.0;
 const int ADC_SAMPLE_COUNT = 21;   // 奇数，中值滤波
 const int ADC_SAMPLE_DELAY_MS = 4;
 

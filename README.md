@@ -142,3 +142,5 @@ npm run dev                           # 监听 0.0.0.0:3000
 
 ## 注意
 记得删除 `lockfile`!!!
+
+测试数据库先运行`part3-analytics-platform/scripts/reset-db.mjs`再 `part3-analytics-platform/scripts/clear-data.mjs --seed`

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useBle } from '~/composables/useBle'
+import { useSerial } from '~/composables/useSerial'
 import { useDemo } from '~/composables/useWqi'
+
 import { useEvaluate } from '~/composables/useEvaluate'
 import { useCapture } from '~/composables/useCapture'
 import { useReports } from '~/composables/useReports'
@@ -17,10 +19,22 @@ import {
 
 const config = useRuntimeConfig()
 const ble = useBle()
+const serial = useSerial()
 const demo = useDemo()
 const { submit, list } = useReports()
 
 const demoOn = ref(config.public.demoMode)
+
+/**
+ * 数据链路模式：
+ *   'ble'    — 走 BLE（ESP32）
+ *   'serial' — Pro Mini 直接 USB 串口连电脑（BLE 临时补救方案）
+ * demoOn 打开时两者都不用。
+ */
+const linkMode = ref<'ble' | 'serial'>('ble')
+/** 当前活动链路（接口与 useBle/useSerial 一致，页面统一读它） */
+const link = computed(() => (linkMode.value === 'serial' ? serial : ble))
+
 
 // ───── 页面导航 / 锚点 ─────
 const navItems = [
@@ -59,13 +73,14 @@ function updateActiveSection() {
 
 /** Demo 模式用模拟聚合数据，BLE 模式用真实聚合数据触发 /evaluate */
 const batchedSource = computed<Metrics | null>(() =>
-  demoOn.value ? demo.batchedMetrics.value : ble.batchedMetrics.value,
+  demoOn.value ? demo.batchedMetrics.value : link.value.batchedMetrics.value,
 )
 
-/** 当前设备 ID：Demo 用固定名，BLE 用真实设备名 */
+/** 当前设备 ID：Demo 用固定名，硬件用当前链路设备名 */
 const deviceId = computed(() =>
-  demoOn.value ? 'demo-device' : (ble.deviceName.value || 'unknown'),
+  demoOn.value ? 'demo-device' : (link.value.deviceName.value || 'unknown'),
 )
+
 
 /** 链路 A 判级 composable：监听 batchedSource 自动调 /evaluate */
 const evaluate = useEvaluate(batchedSource, deviceId)
@@ -89,10 +104,25 @@ function gradeColor(gradeIndex: number): string {
   return GRADE_COLORS[gradeIndex]?.text ?? '#8ba8b7'
 }
 
-/** MetricCard 展示用：Demo 用 demo.metrics，BLE 用最近单帧 rawMetrics */
+/** MetricCard 展示用：Demo 用 demo.metrics，硬件用当前链路最近单帧 rawMetrics */
 const displayMetrics = computed<Metrics | null>(() =>
-  demoOn.value ? demo.metrics.value : ble.rawMetrics.value,
+  demoOn.value ? demo.metrics.value : link.value.rawMetrics.value,
 )
+
+
+/**
+ * 调试字段：Pro Mini 在同一条 JSON 里追加的原始量（ph_adc / ph_v / tds_adc ...），
+ * 随 BLE 上传到网页。这里从最近单帧里挑出非标准 6 字段的键值对用于展示。
+ */
+const STANDARD_METRIC_KEYS = ['tds', 'ph', 'temperature', 'turbidity', 'ec', 'wet']
+const debugFields = computed<Array<{ key: string; value: string }>>(() => {
+  const m = displayMetrics.value
+  if (!m) return []
+  return Object.keys(m)
+    .filter((k) => !STANDARD_METRIC_KEYS.includes(k))
+    .map((k) => ({ key: k, value: String(m[k]) }))
+})
+
 
 // Demo 开关联动
 watch(demoOn, (on) => (on ? demo.start() : demo.stop()), { immediate: true })
@@ -359,18 +389,40 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- BLE 连接：紧挨标题下方 -->
+      <!-- 硬件连接：紧挨标题下方。支持 BLE / 串口两种链路 -->
       <div class="side-ble">
         <template v-if="!demoOn">
-          <button v-if="!ble.connected.value" class="btn-ble" @click="ble.connect">
-            {{ ble.supported.value ? '🔗 连接水杯 BLE' : 'BLE 不可用' }}
+          <!-- 链路模式切换：BLE（ESP32）/ 串口（Pro Mini 直连电脑） -->
+          <div class="link-mode-tabs">
+            <button
+              type="button"
+              :class="{ active: linkMode === 'ble' }"
+              :disabled="link.connected.value"
+              @click="linkMode = 'ble'"
+            >BLE</button>
+            <button
+              type="button"
+              :class="{ active: linkMode === 'serial' }"
+              :disabled="link.connected.value"
+              @click="linkMode = 'serial'"
+            >串口</button>
+          </div>
+
+          <button v-if="!link.connected.value" class="btn-ble" @click="link.connect">
+            <template v-if="linkMode === 'ble'">
+              {{ link.supported.value ? '🔗 连接水杯 BLE' : 'BLE 不可用' }}
+            </template>
+            <template v-else>
+              {{ link.supported.value ? '🔌 连接 Pro Mini 串口' : '串口不可用' }}
+            </template>
           </button>
-          <button v-else class="btn-ble connected" @click="ble.disconnect">
-            断开 · {{ ble.deviceName.value }}
+          <button v-else class="btn-ble connected" @click="link.disconnect">
+            断开 · {{ link.deviceName.value }}
           </button>
         </template>
         <p v-else class="ble-demo-note">Demo 模式已开启，无需连接硬件</p>
       </div>
+
 
       <nav class="quick-menu" aria-label="快捷功能菜单">
         <a
@@ -404,7 +456,8 @@ onUnmounted(() => {
           <h1>Dashboard</h1>
         </div>
         <div class="top-actions">
-          <span v-if="ble.error.value" class="err">{{ ble.error.value }}</span>
+          <span v-if="link.error.value" class="err">{{ link.error.value }}</span>
+
           <span class="status-pill" :class="{ live: displayMetrics }">
             <i></i>{{ displayMetrics ? '数据接入中' : '未接入' }}
           </span>
@@ -421,7 +474,8 @@ onUnmounted(() => {
             <span v-if="!displayMetrics" class="dot-pulse"></span>
             <span>{{ displayMetrics ? '数据已接入，检测中…' : '等待数据 · 连接水杯或开启 Demo' }}</span>
           </div>
-          <p v-if="!demoOn && ble.connected.value" class="wet-tip">
+          <p v-if="!demoOn && link.connected.value" class="wet-tip">
+
             {{ displayMetrics?.wet ? '✅ 水杯已浸没' : '⚠️ 水杯未浸入水中，请浸没后检测' }}
           </p>
         </div>
@@ -504,7 +558,18 @@ onUnmounted(() => {
 
           <div v-show="sensorExpanded" class="metric-collapse">
             <MetricCard :metrics="displayMetrics" />
+
+            <!-- 调试面板：显示 Pro Mini 随 JSON 上传的原始量（ph_adc/ph_v/...） -->
+            <div v-if="debugFields.length" class="debug-panel">
+              <b>🐞 传感器调试数据（Pro Mini 原始量）</b>
+              <div class="debug-grid">
+                <span v-for="f in debugFields" :key="f.key" class="debug-item">
+                  <em>{{ f.key }}</em><i>{{ f.value }}</i>
+                </span>
+              </div>
+            </div>
           </div>
+
           <p v-show="!sensorExpanded" class="collapse-hint">
             {{ displayMetrics ? '传感器数据已接入，点击展开查看 pH / EC / TDS / 浊度等原始指标。' : '暂无传感器数据，连接设备或开启 Demo 后可查看。' }}
           </p>
@@ -810,6 +875,33 @@ onUnmounted(() => {
 .side-ble .btn-ble {
   width: 100%;
 }
+.link-mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 16px;
+  background: rgba(255,255,255,.5);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
+}
+.link-mode-tabs button {
+  border: none;
+  border-radius: 12px;
+  padding: 8px 0;
+  font-size: 13px;
+  font-weight: 800;
+  color: #35677e;
+  background: transparent;
+  cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+}
+.link-mode-tabs button.active {
+  color: #fff;
+  background: linear-gradient(135deg, #27bee2, #168bd4);
+  box-shadow: 0 8px 16px rgba(20,139,212,.28);
+}
+.link-mode-tabs button:disabled { opacity: .55; cursor: not-allowed; }
+
 .ble-demo-note {
   margin: 0;
   padding: 12px 14px;
@@ -984,6 +1076,20 @@ details summary { cursor: pointer; color: #105179; margin-top: 8px; font-weight:
 .collapse-toggle span { display: inline-block; margin-left: 5px; transition: transform .16s ease; }
 .collapse-toggle span.open { transform: rotate(180deg); }
 .metric-collapse { margin-top: 8px; }
+.debug-panel {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(16, 62, 88, .06);
+  border: 1px dashed rgba(37, 151, 196, .4);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.debug-panel > b { display: block; margin-bottom: 8px; color: #17435e; font-size: 13px; }
+.debug-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; }
+.debug-item { display: flex; flex-direction: column; padding: 6px 8px; border-radius: 10px; background: rgba(255,255,255,.6); }
+.debug-item em { font-style: normal; color: #5f8798; font-size: 11px; }
+.debug-item i { font-style: normal; color: #105179; font-weight: 800; font-size: 14px; }
+
 .collapse-hint,
 .empty-state,
 .table-state {

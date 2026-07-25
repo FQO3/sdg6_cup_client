@@ -39,6 +39,12 @@ Services/LLM/*.db
 Services/LLM/*.db-wal
 Services/LLM/*.db-shm
 
+# SQLite transient WAL/SHM files must not be committed
+*.sqlite-wal
+*.sqlite-shm
+*.db-wal
+*.db-shm
+
 # Firmware build artifacts
 firmware/**/build/
 *.bin

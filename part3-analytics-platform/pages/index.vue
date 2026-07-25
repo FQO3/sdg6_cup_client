@@ -1,7 +1,7 @@
 <template>
   <main class="observatory">
     <div class="grain"></div>
-    <a class="deerflow-mark" href="https://deerflow.tech" target="_blank" rel="noreferrer">Created By Deerflow</a>
+    <!-- <a class="deerflow-mark" href="https://deerflow.tech" target="_blank" rel="noreferrer">Created By Deerflow</a> -->
 
     <section class="hero reveal" style="--delay: 0ms">
       <div>
